@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from typing import Optional, Tuple, Union
 
@@ -18,6 +19,7 @@ def agent(
     *,
     yolo: bool = False,
     agent: str = "codex",
+    flags: Optional[str] = None,
 ) -> str:
     """Run a single Codex turn and return only the agent's message.
 
@@ -26,6 +28,7 @@ def agent(
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
         agent: Agent backend to use (only "codex" is supported).
+        flags: Additional raw CLI flags to pass to Codex.
 
     Returns:
         The agent's visible response text with reasoning traces removed.
@@ -36,6 +39,7 @@ def agent(
         cwd=cwd,
         thread_id=None,
         yolo=yolo,
+        flags=flags,
     )
     return message
 
@@ -56,6 +60,7 @@ class Agent:
         yolo: bool = False,
         agent: str = "codex",
         trace_id: Optional[str] = None,
+        flags: Optional[str] = None,
     ) -> None:
         """Create a new session wrapper.
 
@@ -64,10 +69,12 @@ class Agent:
             yolo: Whether to pass --yolo to Codex.
             agent: Agent backend to use (only "codex" is supported).
             trace_id: Optional Codex thread id to resume from the first call.
+            flags: Additional raw CLI flags to pass to Codex.
         """
         _require_codex_agent(agent)
         self._cwd = cwd
         self._yolo = yolo
+        self._flags = flags
         self._thread_id: Optional[str] = trace_id
 
     def __call__(self, prompt: str) -> str:
@@ -77,6 +84,7 @@ class Agent:
             cwd=self._cwd,
             thread_id=self._thread_id,
             yolo=self._yolo,
+            flags=self._flags,
         )
         if thread_id:
             self._thread_id = thread_id
@@ -94,6 +102,7 @@ def _run_codex(
     cwd: Optional[Pathish],
     thread_id: Optional[str],
     yolo: bool,
+    flags: Optional[str],
 ) -> Tuple[str, Optional[str]]:
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     cmd = [
@@ -106,6 +115,8 @@ def _run_codex(
     ]
     if yolo:
         cmd.append("--yolo")
+    if flags:
+        cmd.extend(shlex.split(flags))
     if cwd is not None:
         cmd.extend(["--cd", os.fspath(cwd)])
     if thread_id:

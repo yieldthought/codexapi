@@ -25,11 +25,16 @@ print(agent("Say hello"))
 session = Agent(cwd="/path/to/project")
 print(session("Summarize this repo."))
 print(session("Now list any risks."))
+
+# Save and resume a session later
+thread_id = session.thread_id
+session2 = Agent(cwd="/path/to/project", trace_id=thread_id)
+print(session2("Continue from where we left off."))
 ```
 
 ## API
 
-### `agent(prompt, cwd=None, *, yolo=False, agent="codex") -> str`
+### `agent(prompt, cwd=None, *, yolo=False, agent="codex", flags=None) -> str`
 
 Runs a single Codex turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -38,8 +43,9 @@ items are filtered out.
 - `cwd` (str | PathLike | None): working directory for the Codex session.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `agent` (str): agent backend to use (only `"codex"` is supported).
+- `flags` (str | None): extra CLI flags to pass to Codex.
 
-### `Agent(cwd=None, *, yolo=False, agent="codex", trace_id=None)`
+### `Agent(cwd=None, *, yolo=False, agent="codex", trace_id=None, flags=None)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -49,6 +55,7 @@ the same conversation and returns only the agent's message.
 - `trace_id` (str | None): Codex thread id to resume from the first call.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `agent` (str): agent backend to use (only `"codex"` is supported).
+- `flags` (str | None): extra CLI flags to pass to Codex.
 
 ## Behavior notes
 
