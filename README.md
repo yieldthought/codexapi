@@ -1,4 +1,4 @@
-# AgentAPI
+# CodexAPI
 
 Use codex from python as easily as calling a function with your codex credits instead of the API.
 
@@ -10,13 +10,13 @@ Use codex from python as easily as calling a function with your codex credits in
 ## Install
 
 ```bash
-pip install agentapi
+pip install codexapi
 ```
 
 ## Quickstart
 
 ```python
-from agentapi import agent, Agent
+from codexapi import agent, Agent
 
 # Run one-shot tasks as a function call
 print(agent("Say hello"))

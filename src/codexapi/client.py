@@ -1,4 +1,4 @@
-"""Codex CLI wrapper used by the agentapi public interface."""
+"""Codex CLI wrapper used by the codexapi public interface."""
 
 from __future__ import annotations
 
