@@ -1,6 +1,10 @@
 """Task wrapper for running Codex Agent flows with checkers."""
 
+import logging
+
 from .agent import Agent
+
+_logger = logging.getLogger(__name__)
 
 
 class TaskResult:
@@ -12,6 +16,17 @@ class TaskResult:
         self.attempts = attempts
         self.errors = errors
         self.thread_id = thread_id
+
+    def __repr__(self):
+        return (
+            "TaskResult("
+            f"success={self.success}, "
+            f"attempts={self.attempts}, "
+            f"errors={self.errors!r}, "
+            f"thread_id={self.thread_id!r}, "
+            f"summary={self.summary!r}"
+            ")"
+        )
 
 
 class Task:
@@ -33,13 +48,20 @@ class Task:
         yolo=False,
         thread_id=None,
         flags=None,
+        full_auto=True,
     ):
         if max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
         self.prompt = prompt
         self.max_attempts = max_attempts
         self.cwd = cwd
-        self.agent = Agent(cwd=cwd, yolo=yolo, thread_id=thread_id, flags=flags)
+        self.agent = Agent(
+            cwd=cwd,
+            yolo=yolo,
+            thread_id=thread_id,
+            flags=flags,
+            full_auto=full_auto,
+        )
 
     def set_up(self):
         """Clone a repo, set up a directory etc."""
@@ -78,31 +100,43 @@ class Task:
             f"Outstanding issues:\n{error}"
         )
 
-    def __call__(self):
-        """Run the task with checker-driven retries."""
+    def __call__(self, debug=False):
+        """Run the task with checker-driven retries.
+            If debug is True, log debug messages.
+        """
         try:
             # If this fails in the middle we will still try to tear down
             self.set_up()
 
             # Start with the initial prompt
-            self.agent(self.prompt)
+            output = self.agent(self.prompt)
+            if debug:
+                _logger.debug("Initial output: %s", output)
             
             # Try correcting it up to max_attempts times
             for attempt in range(self.max_attempts):
                 error = self.check()
-
+                if debug:
+                    _logger.debug("Check error: %s", error)
+                    
                 if error:
                     # if there were errors, tell the agent to fix them
-                    self.agent(self.fix_prompt(error))
+                    output = self.agent(self.fix_prompt(error))
+                    if debug:
+                        _logger.debug("Fix output: %s", output)
                 else:
                     # otherwise get a summary of what was done and run on_success
                     summary = self.agent(self.success_prompt())
+                    if debug:
+                        _logger.debug("Success summary: %s", summary)
                     result = TaskResult(True, summary, attempt + 1, error, self.agent.thread_id)
                     self.on_success(result)
                     return result
 
             # Ran out of attempts - get a reason why and run on_failure
             summary = self.agent(self.failure_prompt(error))
+            if debug:
+                _logger.debug("Failure summary: %s", summary)
             result = TaskResult(False, summary, attempt + 1, error, self.agent.thread_id)
             self.on_failure(result)
             return result

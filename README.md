@@ -1,6 +1,8 @@
 # CodexAPI
 
-Use codex from python as easily as calling a function with your codex credits instead of the API.
+Use OpenAI's codex from python as easily as calling a function with your codex credits instead of the API.
+
+*Note: this project is not affiliated with OpenAI in any way. Thanks for the awesome tools and models though!*
 
 ## Requirements
 
@@ -44,7 +46,7 @@ print(result.success, result.summary)
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=False, flags=None) -> str`
+### `agent(prompt, cwd=None, yolo=False, flags=None, full_auto=False) -> str`
 
 Runs a single Codex turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -53,8 +55,9 @@ items are filtered out.
 - `cwd` (str | PathLike | None): working directory for the Codex session.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `flags` (str | None): extra CLI flags to pass to Codex.
+- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
-### `Agent(cwd=None, yolo=False, thread_id=None, flags=None)`
+### `Agent(cwd=None, yolo=False, thread_id=None, flags=None, full_auto=False)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -63,8 +66,9 @@ the same conversation and returns only the agent's message.
 - `thread_id -> str | None`: expose the underlying session id once created.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `flags` (str | None): extra CLI flags to pass to Codex.
+- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
-### `Task(prompt, max_attempts=10, cwd=None, yolo=False, thread_id=None, flags=None)`
+### `Task(prompt, max_attempts=10, cwd=None, yolo=False, thread_id=None, flags=None, full_auto=True)`
 
 Runs a Codex task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
@@ -76,6 +80,7 @@ Runs a Codex task with checker-driven retries. Subclass it and implement
 - `check() -> str | None`: return an error description or `None`/`""`.
 - `on_success(result)`: optional success hook.
 - `on_failure(result)`: optional failure hook.
+- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
 ### `TaskResult(success, summary, attempts, errors, thread_id)`
 

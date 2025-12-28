@@ -8,7 +8,7 @@ import subprocess
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 
 
-def agent(prompt, cwd=None, yolo=False, flags=None):
+def agent(prompt, cwd=None, yolo=False, flags=None, full_auto=False):
     """Run a single Codex turn and return only the agent's message.
 
     Args:
@@ -20,7 +20,14 @@ def agent(prompt, cwd=None, yolo=False, flags=None):
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
-    message, _thread_id = _run_codex(prompt, cwd, thread_id=None, yolo=yolo, flags=flags)
+    message, _thread_id = _run_codex(
+        prompt,
+        cwd,
+        thread_id=None,
+        yolo=yolo,
+        flags=flags,
+        full_auto=full_auto,
+    )
     return message
 
 
@@ -39,6 +46,7 @@ class Agent:
         yolo=False,
         thread_id=None,
         flags=None,
+        full_auto=False,
     ):
         """Create a new session wrapper.
 
@@ -52,17 +60,25 @@ class Agent:
         self.cwd = cwd
         self._yolo = yolo
         self._flags = flags
+        self._full_auto = full_auto
         self.thread_id = thread_id
 
     def __call__(self, prompt):
         """Send a prompt to Codex and return only the agent's message."""
-        message, thread_id = _run_codex(prompt, self.cwd, self.thread_id, self._yolo, self._flags)
+        message, thread_id = _run_codex(
+            prompt,
+            self.cwd,
+            self.thread_id,
+            self._yolo,
+            self._flags,
+            self._full_auto,
+        )
         if thread_id:
             self.thread_id = thread_id
         return message
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags):
+def _run_codex(prompt, cwd, thread_id, yolo, flags, full_auto):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -74,8 +90,12 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags):
     ]
     if yolo:
         command.append("--yolo")
+    if full_auto:
+        command.append("--full-auto")
     if flags:
         command.extend(shlex.split(flags))
+    if cwd:
+        command.extend(["--cd", os.fspath(cwd)])
     if thread_id:
         command.extend(["resume", thread_id, "-"])
     else:
