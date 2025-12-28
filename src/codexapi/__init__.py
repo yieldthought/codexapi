@@ -1,6 +1,7 @@
 """Minimal Python API for running the Codex CLI."""
 
-from .client import Agent, agent
+from .agent import Agent, agent
+from .task import Task, TaskResult
 
-__all__ = ["Agent", "agent"]
+__all__ = ["Agent", "Task", "TaskResult", "agent"]
 __version__ = "0.1.2"
