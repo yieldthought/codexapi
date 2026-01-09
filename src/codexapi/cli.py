@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import Agent, agent
+from .ralph import cancel_ralph_loop, run_ralph_loop
 from .task import TaskFailed, task
 
 _SESSION_ID_RE = re.compile(
@@ -869,9 +870,22 @@ def main(argv=None):
     if argv and argv[0] == "top":
         _run_top(argv[1:])
         return
+    ralph_help = (
+        "Ralph loop mode (--ralph):\n"
+        "  Repeats the exact same prompt each iteration until a completion promise\n"
+        "  is detected or --max-iterations is reached (0 means unlimited).\n"
+        "  Completion promise: output <promise>TEXT</promise> where TEXT matches\n"
+        "  --completion-promise after trimming/collapsing whitespace. CRITICAL RULE:\n"
+        "  Only output the promise when it is completely and unequivocally TRUE.\n"
+        "  Cancel by deleting .codexapi/ralph-loop.local.md or running --ralph-cancel.\n"
+        "  Default reuses a single Codex thread; use --ralph-fresh for a new Agent\n"
+        "  each iteration (no shared context).\n"
+    )
     parser = argparse.ArgumentParser(
         prog="codexapi",
         description="Run Codex via the codexapi wrapper.",
+        epilog=ralph_help,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "prompt",
@@ -902,10 +916,67 @@ def main(argv=None):
         action="store_true",
         help="Print the current thread id to stderr after running.",
     )
+    parser.add_argument(
+        "--ralph",
+        action="store_true",
+        help="Run a Ralph loop that repeats the same prompt each iteration.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Max iterations for --ralph (0 means unlimited).",
+    )
+    parser.add_argument(
+        "--completion-promise",
+        help="Promise text for --ralph to match in <promise>...</promise>.",
+    )
+    parser.add_argument(
+        "--ralph-fresh",
+        action="store_true",
+        help="With --ralph, start each iteration with a fresh Agent context.",
+    )
+    parser.add_argument(
+        "--ralph-cancel",
+        action="store_true",
+        help=(
+            "Cancel a Ralph loop by removing .codexapi/ralph-loop.local.md "
+            "(respects --cwd)."
+        ),
+    )
 
     args = parser.parse_args(argv)
+    if args.ralph_cancel:
+        if (
+            args.ralph
+            or args.task
+            or args.thread_id
+            or args.print_thread_id
+            or args.max_iterations is not None
+            or args.completion_promise is not None
+            or args.ralph_fresh
+            or args.check is not None
+            or args.prompt
+        ):
+            raise SystemExit(
+                "--ralph-cancel cannot be combined with prompts or other modes."
+            )
+        print(cancel_ralph_loop(args.cwd))
+        return
     if args.check is not None and not args.task:
         raise SystemExit("--check requires --task.")
+    if not args.ralph and (
+        args.max_iterations is not None
+        or args.completion_promise is not None
+        or args.ralph_fresh
+    ):
+        raise SystemExit(
+            "--max-iterations/--completion-promise/--ralph-fresh require --ralph."
+        )
+    if args.ralph and (args.task or args.thread_id or args.print_thread_id):
+        raise SystemExit(
+            "--task/--thread-id/--print-thread-id are not supported with --ralph."
+        )
     if args.task and (args.thread_id or args.print_thread_id):
         raise SystemExit("--thread-id/--print-thread-id are not supported with --task.")
 
@@ -913,6 +984,20 @@ def main(argv=None):
 
     exit_code = 0
 
+    if args.ralph:
+        max_iterations = args.max_iterations if args.max_iterations is not None else 0
+        if max_iterations < 0:
+            raise SystemExit("--max-iterations must be >= 0.")
+        run_ralph_loop(
+            prompt,
+            args.cwd,
+            args.yolo,
+            args.flags,
+            max_iterations,
+            args.completion_promise,
+            args.ralph_fresh,
+        )
+        return
     if args.task:
         check = args.check if args.check is not None else prompt
         try:
