@@ -1,8 +1,44 @@
 import argparse
+import json
+import os
+import re
+import select
+import shutil
+import subprocess
 import sys
+import termios
+import tty
+from datetime import datetime
+from pathlib import Path
 
 from .agent import Agent, agent
 from .task import TaskFailed, task
+
+_SESSION_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+_TAIL_BYTES = 256 * 1024
+_TAIL_MAX_BYTES = 4 * 1024 * 1024
+_TAIL_MIN_LINES = 200
+_ROLL_OUT_PREFIX = "rollout-"
+_TOOL_LABELS = {
+    "apply_patch": "Editing files",
+    "exec_command": "Running command",
+    "list_mcp_resources": "Listing resources",
+    "list_mcp_resource_templates": "Listing templates",
+    "read_mcp_resource": "Reading resource",
+    "view_image": "Viewing image",
+    "write_stdin": "Writing to session",
+}
+_COLUMN_TITLES = {
+    "id": "ID",
+    "status": "STAT",
+    "tok": "TOK/S",
+    "model": "MODEL",
+    "effort": "EFF",
+    "perm": "PERM",
+    "cwd": "CWD",
+}
 
 
 def _read_prompt(prompt):
@@ -15,7 +51,674 @@ def _read_prompt(prompt):
     return data
 
 
+def _single_line(text):
+    if not text:
+        return ""
+    return " ".join(text.replace("\r", " ").split())
+
+
+def _truncate_head(text, limit):
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
+def _truncate_tail(text, limit):
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[-limit:]
+    return "..." + text[-(limit - 3) :]
+
+
+def _parse_timestamp(value):
+    if not isinstance(value, str):
+        return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _tail_lines(path):
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            remaining = handle.tell()
+            data = b""
+            while remaining > 0 and len(data) < _TAIL_MAX_BYTES:
+                chunk = min(_TAIL_BYTES, remaining)
+                remaining -= chunk
+                handle.seek(remaining)
+                data = handle.read(chunk) + data
+                if data.count(b"\n") >= _TAIL_MIN_LINES:
+                    break
+    except OSError:
+        return []
+
+    if not data:
+        return []
+    if remaining > 0:
+        parts = data.split(b"\n", 1)
+        if len(parts) == 2:
+            data = parts[1]
+    text = data.decode("utf-8", errors="replace")
+    return text.splitlines()
+
+
+def _extract_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def _activity_title(text):
+    if not isinstance(text, str):
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    first = lines[0]
+    if first.startswith("**") and first.endswith("**") and len(first) > 4:
+        return first[2:-2].strip()
+    if first.startswith("**"):
+        end = first.find("**", 2)
+        if end != -1:
+            title = first[2:end].strip()
+            if title:
+                return title
+    if first.lstrip().startswith("#"):
+        title = first.lstrip("#").strip()
+        if title:
+            return title
+    if first[0] in "-*•":
+        title = first[1:].strip()
+        if title:
+            return title
+    return first
+
+
+def _extract_reasoning(payload):
+    if not isinstance(payload, dict):
+        return ""
+    summary = payload.get("summary")
+    if isinstance(summary, list):
+        parts = []
+        for item in summary:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("summary_text")
+            if isinstance(text, str):
+                parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    content = payload.get("content")
+    return _extract_text(content)
+
+
+def _parse_call_args(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _tool_activity(name, payload):
+    label = _TOOL_LABELS.get(name, f"Running {name}")
+    status = payload.get("status") if isinstance(payload, dict) else None
+    details = ""
+    if name == "exec_command":
+        args = _parse_call_args(payload.get("arguments"))
+        cmd = args.get("cmd")
+        if isinstance(cmd, str) and cmd.strip():
+            details = cmd.strip()
+    if details:
+        label = f"{label}: {details}"
+    if status:
+        label = f"{label} ({status})"
+    return label
+
+
+def _session_id(path):
+    match = _SESSION_ID_RE.search(path.name)
+    if match:
+        return match.group(0)
+    return path.stem
+
+
+def _is_session_file(path, root_str):
+    if not path.startswith(root_str):
+        return False
+    name = os.path.basename(path)
+    return name.startswith(_ROLL_OUT_PREFIX) and name.endswith(".jsonl")
+
+
+def _list_codex_processes():
+    result = subprocess.run(
+        ["ps", "-ax", "-o", "pid=,ppid=,comm=,args="],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    processes = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 3)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        try:
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        comm = parts[2]
+        args = parts[3] if len(parts) > 3 else ""
+        if comm == "codex" or re.search(r"(^|[\\s/])codex(\\s|$)", args):
+            processes.append({"pid": pid, "ppid": ppid, "comm": comm, "args": args})
+    return processes
+
+
+def _process_session_files(pid, root):
+    root_str = str(root)
+    paths = set()
+    if shutil.which("lsof"):
+        result = subprocess.run(
+            ["lsof", "-p", str(pid), "-Fn"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if not line.startswith("n"):
+                    continue
+                path = line[1:]
+                if _is_session_file(path, root_str):
+                    paths.add(Path(path))
+        return paths
+
+    proc_fd = Path(f"/proc/{pid}/fd")
+    if proc_fd.exists():
+        for entry in proc_fd.iterdir():
+            try:
+                target = os.readlink(entry)
+            except OSError:
+                continue
+            if _is_session_file(target, root_str):
+                paths.add(Path(target))
+    return paths
+
+
+def _tokens_per_second(events):
+    if len(events) < 2:
+        return None
+    (start_ts, _start_usage), (end_ts, end_usage) = events[-2], events[-1]
+    delta = (end_ts - start_ts).total_seconds()
+    if delta <= 0:
+        return None
+    output_tokens = end_usage.get("output_tokens")
+    if not isinstance(output_tokens, int):
+        output_tokens = end_usage.get("total_tokens")
+    if not isinstance(output_tokens, int):
+        return None
+    return output_tokens / delta
+
+
+def _summarize_session(path, mtime):
+    prompt = None
+    prompt_fallback = None
+    output = None
+    output_fallback = None
+    token_events = []
+    last_user_ts = None
+    last_agent_ts = None
+    last_event_ts = None
+    last_event_kind = None
+    last_reasoning = None
+    last_summary = None
+    last_tool = None
+    meta = {}
+
+    for line in _tail_lines(path):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        timestamp = _parse_timestamp(data.get("timestamp"))
+        if timestamp:
+            last_event_ts = timestamp
+        if data.get("type") == "event_msg":
+            payload = data.get("payload") or {}
+            kind = payload.get("type")
+            last_event_kind = kind
+            if kind == "user_message":
+                message = payload.get("message")
+                if isinstance(message, str) and message.strip():
+                    prompt = message
+                if timestamp:
+                    last_user_ts = timestamp
+            elif kind == "agent_message":
+                message = payload.get("message")
+                if isinstance(message, str) and message.strip():
+                    output = message
+                if timestamp:
+                    last_agent_ts = timestamp
+            elif kind == "agent_reasoning":
+                text = payload.get("text")
+                if isinstance(text, str) and text.strip():
+                    last_reasoning = _activity_title(text) or text
+            elif kind == "token_count":
+                info = payload.get("info")
+                if isinstance(info, dict):
+                    usage = info.get("last_token_usage")
+                    if isinstance(usage, dict) and timestamp:
+                        token_events.append((timestamp, usage))
+        elif data.get("type") == "response_item":
+            payload = data.get("payload") or {}
+            if payload.get("type") == "message":
+                role = payload.get("role")
+                text = _extract_text(payload.get("content"))
+                if role == "user" and text:
+                    prompt_fallback = text
+                    if timestamp:
+                        last_user_ts = timestamp
+                elif role == "assistant" and text:
+                    output_fallback = text
+                    if timestamp:
+                        last_agent_ts = timestamp
+            elif payload.get("type") == "reasoning":
+                text = _extract_reasoning(payload)
+                if text:
+                    last_summary = _activity_title(text) or text
+            elif payload.get("type") in ("custom_tool_call", "function_call"):
+                name = payload.get("name")
+                if isinstance(name, str) and name:
+                    last_tool = _tool_activity(name, payload)
+        elif data.get("type") == "turn_context":
+            payload = data.get("payload") or {}
+            if isinstance(payload, dict):
+                meta = payload
+                last_event_kind = "turn_context"
+        elif data.get("type") == "session_meta":
+            payload = data.get("payload") or {}
+            if isinstance(payload, dict):
+                meta.setdefault("cwd", payload.get("cwd"))
+                meta.setdefault("model_provider", payload.get("model_provider"))
+                last_event_kind = "session_meta"
+
+    if not prompt:
+        prompt = prompt_fallback or ""
+    if not output:
+        output = output_fallback or ""
+    activity = last_reasoning or last_summary or last_tool or output or ""
+
+    return {
+        "id": _session_id(path),
+        "prompt": prompt,
+        "output": output,
+        "activity": activity,
+        "tok_s": _tokens_per_second(token_events),
+        "mtime": mtime,
+        "last_event_ts": last_event_ts,
+        "last_user_ts": last_user_ts,
+        "last_agent_ts": last_agent_ts,
+        "last_event_kind": last_event_kind,
+        "meta": meta,
+    }
+
+
+def _session_status(session):
+    last_user = session.get("last_user_ts")
+    last_agent = session.get("last_agent_ts")
+    if last_user and (not last_agent or last_user > last_agent):
+        return "running"
+    if last_agent:
+        return "idle"
+    if session.get("last_event_kind") in ("agent_reasoning", "token_count"):
+        return "running"
+    return "idle"
+
+
+def _active_sessions(root):
+    if not root.exists():
+        return []
+    processes = _list_codex_processes()
+    if not processes:
+        return []
+    by_pid = {proc["pid"]: proc for proc in processes}
+    children = {pid: [] for pid in by_pid}
+    for proc in processes:
+        ppid = proc.get("ppid")
+        if ppid in children:
+            children[ppid].append(proc["pid"])
+    for pid in children:
+        children[pid].sort()
+    sessions = []
+    seen = set()
+    sessions_by_pid = {}
+    for proc in processes:
+        entries = []
+        for path in _process_session_files(proc["pid"], root):
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            info = _summarize_session(path, mtime)
+            info["status"] = _session_status(info)
+            entries.append(info)
+        entries.sort(key=lambda item: item["mtime"], reverse=True)
+        if entries:
+            sessions_by_pid[proc["pid"]] = entries
+
+    cache = {}
+
+    def subtree_mtime(pid):
+        if pid in cache:
+            return cache[pid]
+        latest = 0
+        for entry in sessions_by_pid.get(pid, []):
+            latest = max(latest, entry["mtime"])
+        for child in children.get(pid, []):
+            latest = max(latest, subtree_mtime(child))
+        cache[pid] = latest
+        return latest
+
+    roots = [pid for pid, proc in by_pid.items() if proc.get("ppid") not in by_pid]
+    roots.sort(key=subtree_mtime, reverse=True)
+
+    def add_pid(pid, depth):
+        entries = sessions_by_pid.get(pid, [])
+        has_entry = bool(entries)
+        for entry in entries:
+            entry["depth"] = depth
+            sessions.append(entry)
+        child_depth = depth + 1 if has_entry else depth
+        for child in children.get(pid, []):
+            add_pid(child, child_depth)
+
+    for root_pid in roots:
+        add_pid(root_pid, 0)
+
+    return sessions
+
+
+def _permission_label(meta):
+    approval = meta.get("approval_policy") if isinstance(meta, dict) else None
+    sandbox = meta.get("sandbox_policy") if isinstance(meta, dict) else None
+    if isinstance(sandbox, dict):
+        sandbox = sandbox.get("type")
+    if not approval and not sandbox:
+        return "-"
+    approval = approval or "-"
+    sandbox = sandbox or "-"
+    return f"{approval}/{sandbox}"
+
+
+def _layout_columns(width, id_width, show):
+    columns = [
+        ("id", "<"),
+        ("status", "<"),
+        ("tok", ">"),
+    ]
+    widths = {
+        "id": id_width,
+        "status": 4,
+        "tok": 7,
+    }
+    mins = {}
+
+    if show.get("model"):
+        columns.append(("model", "<"))
+        widths["model"] = 12
+        mins["model"] = 8
+    if show.get("effort"):
+        columns.append(("effort", "<"))
+        widths["effort"] = 6
+        mins["effort"] = 4
+    if show.get("perm"):
+        columns.append(("perm", "<"))
+        widths["perm"] = 12
+        mins["perm"] = 8
+    if show.get("cwd", True):
+        columns.append(("cwd", "<"))
+        widths["cwd"] = 24
+        mins["cwd"] = 10
+
+    def available():
+        fixed = sum(
+            widths[key]
+            for key in widths
+        )
+        return width - (fixed + len(widths) + 3)
+
+    avail = available()
+    target = 40
+    need = target - avail
+    for key in ("cwd", "perm", "model", "effort"):
+        if need <= 0:
+            break
+        if key not in widths:
+            continue
+        current = widths[key]
+        minimum = mins.get(key, current)
+        if current > minimum:
+            drop = min(current - minimum, need)
+            widths[key] -= drop
+            need -= drop
+
+    avail = available()
+    if avail < 20:
+        avail = 20
+    prompt_max = max(10, min(40, avail // 3))
+    output_max = max(10, avail - prompt_max)
+    widths["prompt"] = prompt_max
+    widths["output"] = output_max
+    return {
+        "columns": columns,
+        "widths": widths,
+    }
+
+
+def _format_session(session, layout):
+    widths = layout["widths"]
+    depth = session.get("depth", 0)
+    session_id = (" " * depth) + session["id"][:8]
+    status = "RUN" if session.get("status") == "running" else "IDLE"
+    tok_s = session["tok_s"]
+    tok_s_str = "-" if tok_s is None else f"{tok_s:5.1f}"
+    meta = session.get("meta") or {}
+    model = meta.get("model") or meta.get("model_provider") or "-"
+    effort = meta.get("effort") or "-"
+    perm = _permission_label(meta)
+    cwd = meta.get("cwd") or "-"
+    prompt = _single_line(session["prompt"]) or "-"
+    activity = _single_line(session.get("activity") or session["output"]) or "-"
+
+    values = {
+        "id": session_id,
+        "status": status,
+        "tok": tok_s_str,
+        "model": _truncate_head(str(model), widths.get("model", 0)),
+        "effort": _truncate_head(str(effort), widths.get("effort", 0)),
+        "perm": _truncate_head(str(perm), widths.get("perm", 0)),
+        "cwd": _truncate_tail(str(cwd), widths.get("cwd", 0)),
+    }
+
+    parts = []
+    for key, align in layout["columns"]:
+        width = widths[key]
+        value = values.get(key, "")
+        parts.append(f"{value:{align}{width}}")
+
+    prompt = _truncate_head(prompt, widths["prompt"])
+    activity = _truncate_tail(activity, widths["output"])
+
+    return " ".join(parts) + f" {prompt} | {activity}"
+
+
+def _format_header(width, running, idle, total_tok_s):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total_str = "-" if total_tok_s is None else f"{total_tok_s:.1f}"
+    header = (
+        f"codexapi top - {now}  running: {running}  idle: {idle}  "
+        f"total tok/s: {total_str}"
+    )
+    return _truncate_head(header, width)
+
+
+def _format_columns(layout):
+    widths = layout["widths"]
+    parts = []
+    for key, align in layout["columns"]:
+        title = _COLUMN_TITLES.get(key, key.upper())
+        parts.append(f"{title:{align}{widths[key]}}")
+    return " ".join(parts) + f" {'PROMPT':<{widths['prompt']}} | ACTIVITY"
+
+
+def _print_top_help(width, show):
+    def status(value):
+        return "on" if value else "off"
+
+    lines = [
+        "codexapi top help",
+        "",
+        "Keys:",
+        "  space  refresh",
+        "  q / Esc  quit",
+        "  h / ?  toggle help",
+        f"  m  toggle MODEL column ({status(show.get('model'))})",
+        f"  e  toggle EFF column ({status(show.get('effort'))})",
+        f"  p  toggle PERM column ({status(show.get('perm'))})",
+    ]
+    for line in lines:
+        print(_truncate_head(line, width))
+
+
+def _print_top_once(show):
+    root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+    sessions = _active_sessions(root)
+    width = shutil.get_terminal_size((160, 20)).columns
+
+    if not sessions:
+        print("No active Codex sessions.")
+        return
+
+    running = sum(1 for session in sessions if session.get("status") == "running")
+    idle = sum(1 for session in sessions if session.get("status") == "idle")
+    total_tok_s = sum(
+        session["tok_s"]
+        for session in sessions
+        if session.get("status") == "running" and session["tok_s"] is not None
+    )
+    if total_tok_s == 0:
+        total_tok_s = None
+
+    max_depth = max(session.get("depth", 0) for session in sessions)
+    layout = _layout_columns(width, 8 + max_depth, show)
+
+    print(_format_header(width, running, idle, total_tok_s))
+    print(_format_columns(layout))
+
+    for session in sessions:
+        print(_format_session(session, layout))
+
+
+def _run_top(argv):
+    if argv and argv[0] in ("-h", "--help"):
+        print("usage: codexapi top")
+        return
+    if argv:
+        raise SystemExit("codexapi top takes no arguments.")
+    if not sys.stdout.isatty():
+        _print_top_once(
+            {
+                "model": False,
+                "effort": False,
+                "perm": False,
+                "cwd": True,
+            }
+        )
+        return
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    show = {
+        "model": False,
+        "effort": False,
+        "perm": False,
+        "cwd": True,
+    }
+    show_help = False
+    try:
+        while True:
+            sys.stdout.write("\033[H\033[J")
+            width = shutil.get_terminal_size((160, 20)).columns
+            if show_help:
+                _print_top_help(width, show)
+            else:
+                _print_top_once(show)
+            sys.stdout.flush()
+            ready, _unused, _unused2 = select.select([sys.stdin], [], [], 1)
+            if not ready:
+                continue
+            ch = sys.stdin.read(1)
+            if ch in ("q", "\x1b"):
+                break
+            if ch in ("h", "?"):
+                show_help = not show_help
+                continue
+            if show_help:
+                show_help = False
+            if ch == "m":
+                show["model"] = not show["model"]
+                continue
+            if ch == "e":
+                show["effort"] = not show["effort"]
+                continue
+            if ch == "p":
+                show["perm"] = not show["perm"]
+                continue
+    except KeyboardInterrupt:
+        return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "top":
+        _run_top(argv[1:])
+        return
     parser = argparse.ArgumentParser(
         prog="codexapi",
         description="Run Codex via the codexapi wrapper.",

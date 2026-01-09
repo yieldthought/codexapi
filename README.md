@@ -56,6 +56,13 @@ echo "Say hello." | codexapi
 
 Task mode exits with code 0 on success and 1 on failure, printing the summary.
 
+Show running sessions and their latest activity:
+
+```bash
+codexapi top
+```
+Press `h` for keys.
+
 Resume a session and print the thread id to stderr:
 
 ```bash
