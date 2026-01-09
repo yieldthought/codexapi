@@ -69,6 +69,16 @@ Resume a session and print the thread id to stderr:
 codexapi --thread-id THREAD_ID --print-thread-id "Continue where we left off."
 ```
 
+Ralph loop mode repeats the same prompt until a completion promise or a max
+iteration cap is hit (0 means unlimited). Cancel by deleting
+`.codexapi/ralph-loop.local.md` or running `codexapi --ralph-cancel`.
+
+```bash
+codexapi --ralph "Fix the bug." --completion-promise DONE --max-iterations 5
+codexapi --ralph --ralph-fresh "Try again from scratch." --max-iterations 3
+codexapi --ralph-cancel --cwd /path/to/project
+```
+
 ## API
 
 ### `agent(prompt, cwd=None, yolo=False, flags=None) -> str`
