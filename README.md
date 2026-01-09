@@ -49,12 +49,16 @@ print(result.success, result.summary)
 After installing, use the `codexapi` command:
 
 ```bash
-codexapi "Summarize this repo."
-codexapi --cwd /path/to/project "Fix the failing tests."
-echo "Say hello." | codexapi
+codexapi run "Summarize this repo."
+codexapi run --cwd /path/to/project "Fix the failing tests."
+echo "Say hello." | codexapi run
 ```
 
-Task mode exits with code 0 on success and 1 on failure, printing the summary.
+`codexapi task` exits with code 0 on success and 1 on failure, printing the summary.
+
+```bash
+codexapi task "Fix the failing tests." --max-iterations 5
+```
 
 Show running sessions and their latest activity:
 
@@ -66,17 +70,17 @@ Press `h` for keys.
 Resume a session and print the thread id to stderr:
 
 ```bash
-codexapi --thread-id THREAD_ID --print-thread-id "Continue where we left off."
+codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off."
 ```
 
 Ralph loop mode repeats the same prompt until a completion promise or a max
 iteration cap is hit (0 means unlimited). Cancel by deleting
-`.codexapi/ralph-loop.local.md` or running `codexapi --ralph-cancel`.
+`.codexapi/ralph-loop.local.md` or running `codexapi ralph --cancel`.
 
 ```bash
-codexapi --ralph "Fix the bug." --completion-promise DONE --max-iterations 5
-codexapi --ralph --ralph-fresh "Try again from scratch." --max-iterations 3
-codexapi --ralph-cancel --cwd /path/to/project
+codexapi ralph "Fix the bug." --completion-promise DONE --max-iterations 5
+codexapi ralph --ralph-fresh "Try again from scratch." --max-iterations 3
+codexapi ralph --cancel --cwd /path/to/project
 ```
 
 ## API

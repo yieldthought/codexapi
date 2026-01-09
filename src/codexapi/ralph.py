@@ -39,7 +39,7 @@ def run_ralph_loop(
 
     By default a single Agent instance is reused for shared context. Set
     `fresh=True` to create a new Agent each iteration for a clean context.
-    Cancel by deleting the state file or running `codexapi --ralph-cancel`.
+    Cancel by deleting the state file or running `codexapi ralph --cancel`.
     """
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
@@ -81,7 +81,7 @@ def run_ralph_loop(
                 "",
                 "The loop will resend the SAME PROMPT each iteration.",
                 "Cancel by deleting .codexapi/ralph-loop.local.md or running",
-                "codexapi --ralph-cancel.",
+                "codexapi ralph --cancel.",
                 "No manual stop beyond max iterations or completion promise.",
                 "",
                 "To monitor: head -10 .codexapi/ralph-loop.local.md",

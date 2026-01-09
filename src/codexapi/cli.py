@@ -870,146 +870,164 @@ def _run_top(argv):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv and argv[0] == "top":
-        _run_top(argv[1:])
-        return
     ralph_help = (
-        "Ralph loop mode (--ralph):\n"
+        "Ralph loop mode (ralph command):\n"
         "  Repeats the exact same prompt each iteration until a completion promise\n"
         "  is detected or --max-iterations is reached (0 means unlimited).\n"
         "  Completion promise: output <promise>TEXT</promise> where TEXT matches\n"
         "  --completion-promise after trimming/collapsing whitespace. CRITICAL RULE:\n"
         "  Only output the promise when it is completely and unequivocally TRUE.\n"
-        "  Cancel by deleting .codexapi/ralph-loop.local.md or running --ralph-cancel.\n"
+        "  Cancel by deleting .codexapi/ralph-loop.local.md or running codexapi ralph --cancel.\n"
         "  Default reuses a single Codex thread; use --ralph-fresh for a new Agent\n"
         "  each iteration (no shared context).\n"
     )
     parser = argparse.ArgumentParser(
         prog="codexapi",
         description="Run Codex via the codexapi wrapper.",
-        epilog=ralph_help,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run a Codex prompt.",
+    )
+    run_parser.add_argument(
         "prompt",
         nargs="?",
         help="Prompt to send. Use '-' or omit to read from stdin.",
     )
-    parser.add_argument(
-        "--task",
-        action="store_true",
-        help="Run in task mode with verification retries.",
-    )
-    parser.add_argument(
-        "--check",
-        help="Optional check prompt for --task. Defaults to the task prompt.",
-    )
-    parser.add_argument("--cwd", help="Working directory for the Codex session.")
-    parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
-    parser.add_argument(
+    run_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    run_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    run_parser.add_argument(
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--thread-id",
         help="Resume an existing Codex thread id.",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--print-thread-id",
         action="store_true",
         help="Print the current thread id to stderr after running.",
     )
-    parser.add_argument(
-        "--ralph",
-        action="store_true",
-        help="Run a Ralph loop that repeats the same prompt each iteration.",
+
+    task_parser = subparsers.add_parser(
+        "task",
+        help="Run a task with verification retries.",
     )
-    parser.add_argument(
+    task_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Prompt to send. Use '-' or omit to read from stdin.",
+    )
+    task_parser.add_argument(
+        "--check",
+        help="Optional check prompt. Defaults to the task prompt.",
+    )
+    task_parser.add_argument(
         "--max-iterations",
         type=int,
-        default=None,
-        help="Max iterations for --ralph (0 means unlimited).",
+        default=10,
+        help="Max verification retries after a failed check (0 means no retries).",
     )
-    parser.add_argument(
+    task_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    task_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    task_parser.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+    )
+
+    ralph_parser = subparsers.add_parser(
+        "ralph",
+        help="Run a Ralph loop.",
+        epilog=ralph_help,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ralph_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Prompt to send. Use '-' or omit to read from stdin.",
+    )
+    ralph_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Max iterations for the loop (0 means unlimited).",
+    )
+    ralph_parser.add_argument(
+        "--cancel",
+        action="store_true",
+        help="Cancel the Ralph loop state in the target cwd.",
+    )
+    ralph_parser.add_argument(
         "--completion-promise",
-        help="Promise text for --ralph to match in <promise>...</promise>.",
+        help="Promise text to match in <promise>...</promise>.",
     )
-    parser.add_argument(
+    ralph_parser.add_argument(
         "--ralph-fresh",
         action="store_true",
-        help="With --ralph, start each iteration with a fresh Agent context.",
+        help="Start each iteration with a fresh Agent context.",
     )
-    parser.add_argument(
-        "--ralph-cancel",
-        action="store_true",
-        help=(
-            "Cancel a Ralph loop by removing .codexapi/ralph-loop.local.md "
-            "(respects --cwd)."
-        ),
+    ralph_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    ralph_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    ralph_parser.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+    )
+
+    subparsers.add_parser(
+        "top",
+        help="Show running Codex sessions.",
     )
 
     args = parser.parse_args(argv)
-    if args.ralph_cancel:
-        if (
-            args.ralph
-            or args.task
-            or args.thread_id
-            or args.print_thread_id
-            or args.max_iterations is not None
-            or args.completion_promise is not None
-            or args.ralph_fresh
-            or args.check is not None
-            or args.prompt
-        ):
-            raise SystemExit(
-                "--ralph-cancel cannot be combined with prompts or other modes."
-            )
-        print(cancel_ralph_loop(args.cwd))
+    if args.command is None:
+        parser.print_help()
+        raise SystemExit(2)
+    if args.command == "top":
+        _run_top([])
         return
-    if args.check is not None and not args.task:
-        raise SystemExit("--check requires --task.")
-    if not args.ralph and (
-        args.max_iterations is not None
-        or args.completion_promise is not None
-        or args.ralph_fresh
-    ):
-        raise SystemExit(
-            "--max-iterations/--completion-promise/--ralph-fresh require --ralph."
-        )
-    if args.ralph and (args.task or args.thread_id or args.print_thread_id):
-        raise SystemExit(
-            "--task/--thread-id/--print-thread-id are not supported with --ralph."
-        )
-    if args.task and (args.thread_id or args.print_thread_id):
-        raise SystemExit("--thread-id/--print-thread-id are not supported with --task.")
+
+    if args.command == "ralph":
+        if args.cancel:
+            if args.prompt:
+                raise SystemExit("ralph --cancel takes no prompt.")
+            if args.completion_promise or args.ralph_fresh:
+                raise SystemExit("--completion-promise/--ralph-fresh are not allowed with --cancel.")
+            if args.max_iterations != 0:
+                raise SystemExit("--max-iterations is not allowed with --cancel.")
+            print(cancel_ralph_loop(args.cwd))
+            return
 
     prompt = _read_prompt(args.prompt)
-
     exit_code = 0
 
-    if args.ralph:
-        max_iterations = args.max_iterations if args.max_iterations is not None else 0
-        if max_iterations < 0:
+    if args.command == "ralph":
+        if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
         run_ralph_loop(
             prompt,
             args.cwd,
             args.yolo,
             args.flags,
-            max_iterations,
+            args.max_iterations,
             args.completion_promise,
             args.ralph_fresh,
         )
         return
-    if args.task:
+    if args.command == "task":
+        if args.max_iterations < 0:
+            raise SystemExit("--max-iterations must be >= 0.")
         check = args.check if args.check is not None else prompt
         try:
             message = task(
                 prompt,
                 check,
-                cwd=args.cwd,
-                yolo=args.yolo,
-                flags=args.flags,
+                args.max_iterations,
+                args.cwd,
+                args.yolo,
+                args.flags,
             )
         except TaskFailed as exc:
             message = exc.summary
