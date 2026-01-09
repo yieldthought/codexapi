@@ -34,6 +34,8 @@ _COLUMN_TITLES = {
     "id": "ID",
     "status": "STAT",
     "tok": "TOK/S",
+    "in": "IN",
+    "out": "OUT",
     "model": "MODEL",
     "effort": "EFF",
     "perm": "PERM",
@@ -291,20 +293,43 @@ def _tokens_per_second(events):
     return output_tokens / delta
 
 
+def _format_token_total(value):
+    if value is None:
+        return "-"
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}b"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}m"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(value)
+
+
 def _summarize_session(path, mtime):
     prompt = None
     prompt_fallback = None
     output = None
     output_fallback = None
+    output_ts = None
+    output_fallback_ts = None
     token_events = []
     last_user_ts = None
     last_agent_ts = None
     last_event_ts = None
     last_event_kind = None
     last_reasoning = None
+    last_reasoning_ts = None
     last_summary = None
+    last_summary_ts = None
     last_tool = None
+    last_tool_ts = None
+    total_usage = None
     meta = {}
+    subagent = None
 
     for line in _tail_lines(path):
         try:
@@ -328,18 +353,25 @@ def _summarize_session(path, mtime):
                 message = payload.get("message")
                 if isinstance(message, str) and message.strip():
                     output = message
+                    if timestamp:
+                        output_ts = timestamp
                 if timestamp:
                     last_agent_ts = timestamp
             elif kind == "agent_reasoning":
                 text = payload.get("text")
                 if isinstance(text, str) and text.strip():
                     last_reasoning = _activity_title(text) or text
+                    if timestamp:
+                        last_reasoning_ts = timestamp
             elif kind == "token_count":
                 info = payload.get("info")
                 if isinstance(info, dict):
                     usage = info.get("last_token_usage")
                     if isinstance(usage, dict) and timestamp:
                         token_events.append((timestamp, usage))
+                    total = info.get("total_token_usage")
+                    if isinstance(total, dict):
+                        total_usage = total
         elif data.get("type") == "response_item":
             payload = data.get("payload") or {}
             if payload.get("type") == "message":
@@ -352,32 +384,60 @@ def _summarize_session(path, mtime):
                 elif role == "assistant" and text:
                     output_fallback = text
                     if timestamp:
+                        output_fallback_ts = timestamp
+                    if timestamp:
                         last_agent_ts = timestamp
             elif payload.get("type") == "reasoning":
                 text = _extract_reasoning(payload)
                 if text:
                     last_summary = _activity_title(text) or text
+                    if timestamp:
+                        last_summary_ts = timestamp
             elif payload.get("type") in ("custom_tool_call", "function_call"):
                 name = payload.get("name")
                 if isinstance(name, str) and name:
                     last_tool = _tool_activity(name, payload)
+                    if timestamp:
+                        last_tool_ts = timestamp
         elif data.get("type") == "turn_context":
             payload = data.get("payload") or {}
             if isinstance(payload, dict):
-                meta = payload
+                meta.update(payload)
                 last_event_kind = "turn_context"
         elif data.get("type") == "session_meta":
             payload = data.get("payload") or {}
             if isinstance(payload, dict):
                 meta.setdefault("cwd", payload.get("cwd"))
                 meta.setdefault("model_provider", payload.get("model_provider"))
+                source = payload.get("source")
+                if isinstance(source, dict):
+                    meta.setdefault("source", source)
+                    subagent = source.get("subagent") or subagent
                 last_event_kind = "session_meta"
 
     if not prompt:
         prompt = prompt_fallback or ""
     if not output:
         output = output_fallback or ""
-    activity = last_reasoning or last_summary or last_tool or output or ""
+        output_ts = output_fallback_ts
+
+    if subagent:
+        meta.setdefault("subagent", subagent)
+
+    activity = ""
+    cutoff = last_user_ts
+    for text, ts in (
+        (last_reasoning, last_reasoning_ts),
+        (last_summary, last_summary_ts),
+        (last_tool, last_tool_ts),
+        (output, output_ts),
+    ):
+        if not text:
+            continue
+        if cutoff and (not ts or ts < cutoff):
+            continue
+        activity = text
+        break
 
     return {
         "id": _session_id(path),
@@ -385,6 +445,7 @@ def _summarize_session(path, mtime):
         "output": output,
         "activity": activity,
         "tok_s": _tokens_per_second(token_events),
+        "total_usage": total_usage,
         "mtime": mtime,
         "last_event_ts": last_event_ts,
         "last_user_ts": last_user_ts,
@@ -423,6 +484,18 @@ def _active_sessions(root):
     sessions = []
     seen = set()
     sessions_by_pid = {}
+
+    def is_subagent(entry):
+        meta = entry.get("meta") or {}
+        subagent = meta.get("subagent")
+        if isinstance(subagent, str) and subagent:
+            return True
+        source = meta.get("source")
+        if isinstance(source, dict):
+            subagent = source.get("subagent")
+            return isinstance(subagent, str) and subagent
+        return False
+
     for proc in processes:
         entries = []
         for path in _process_session_files(proc["pid"], root):
@@ -437,6 +510,11 @@ def _active_sessions(root):
             info["status"] = _session_status(info)
             entries.append(info)
         entries.sort(key=lambda item: item["mtime"], reverse=True)
+        if entries:
+            for index, entry in enumerate(entries):
+                if not is_subagent(entry):
+                    entries.insert(0, entries.pop(index))
+                    break
         if entries:
             sessions_by_pid[proc["pid"]] = entries
 
@@ -459,8 +537,8 @@ def _active_sessions(root):
     def add_pid(pid, depth):
         entries = sessions_by_pid.get(pid, [])
         has_entry = bool(entries)
-        for entry in entries:
-            entry["depth"] = depth
+        for index, entry in enumerate(entries):
+            entry["depth"] = depth + (1 if index else 0)
             sessions.append(entry)
         child_depth = depth + 1 if has_entry else depth
         for child in children.get(pid, []):
@@ -489,11 +567,15 @@ def _layout_columns(width, id_width, show):
         ("id", "<"),
         ("status", "<"),
         ("tok", ">"),
+        ("in", ">"),
+        ("out", ">"),
     ]
     widths = {
         "id": id_width,
         "status": 4,
         "tok": 7,
+        "in": 7,
+        "out": 7,
     }
     mins = {}
 
@@ -563,11 +645,16 @@ def _format_session(session, layout):
     cwd = meta.get("cwd") or "-"
     prompt = _single_line(session["prompt"]) or "-"
     activity = _single_line(session.get("activity") or session["output"]) or "-"
+    total_usage = session.get("total_usage") or {}
+    total_in = _format_token_total(total_usage.get("input_tokens"))
+    total_out = _format_token_total(total_usage.get("output_tokens"))
 
     values = {
         "id": session_id,
         "status": status,
         "tok": tok_s_str,
+        "in": total_in,
+        "out": total_out,
         "model": _truncate_head(str(model), widths.get("model", 0)),
         "effort": _truncate_head(str(effort), widths.get("effort", 0)),
         "perm": _truncate_head(str(perm), widths.get("perm", 0)),
@@ -581,18 +668,24 @@ def _format_session(session, layout):
         parts.append(f"{value:{align}{width}}")
 
     prompt = _truncate_head(prompt, widths["prompt"])
+    prompt = f"{prompt:<{widths['prompt']}}"
     activity = _truncate_tail(activity, widths["output"])
 
     return " ".join(parts) + f" {prompt} | {activity}"
 
 
-def _format_header(width, running, idle, total_tok_s):
+def _format_header(width, running, idle, total_tok_s, total_in, total_out):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total_str = "-" if total_tok_s is None else f"{total_tok_s:.1f}"
     header = (
         f"codexapi top - {now}  running: {running}  idle: {idle}  "
         f"total tok/s: {total_str}"
     )
+    if total_in is not None or total_out is not None:
+        header += (
+            f"  total in/out: {_format_token_total(total_in)}"
+            f"/{_format_token_total(total_out)}"
+        )
     return _truncate_head(header, width)
 
 
@@ -642,11 +735,36 @@ def _print_top_once(show):
     )
     if total_tok_s == 0:
         total_tok_s = None
+    total_input = 0
+    total_output = 0
+    have_input = False
+    have_output = False
+    for session in sessions:
+        usage = session.get("total_usage")
+        if not isinstance(usage, dict):
+            continue
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        if isinstance(input_tokens, int):
+            total_input += input_tokens
+            have_input = True
+        if isinstance(output_tokens, int):
+            total_output += output_tokens
+            have_output = True
 
     max_depth = max(session.get("depth", 0) for session in sessions)
     layout = _layout_columns(width, 8 + max_depth, show)
 
-    print(_format_header(width, running, idle, total_tok_s))
+    print(
+        _format_header(
+            width,
+            running,
+            idle,
+            total_tok_s,
+            total_input if have_input else None,
+            total_output if have_output else None,
+        )
+    )
     print(_format_columns(layout))
 
     for session in sessions:
