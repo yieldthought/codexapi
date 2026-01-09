@@ -1,10 +1,160 @@
 """Task wrapper for running Codex Agent flows with checkers."""
 
+import json
 import logging
 
 from .agent import Agent
 
 _logger = logging.getLogger(__name__)
+
+_CHECK_PREFIX = (
+    "You are a verification agent. Evaluate the workspace against the check below.\n"
+    "Return only JSON with keys: success (boolean) and reason (string).\n"
+    "Set success to true only if everything matches the intent."
+)
+_CHECK_SUFFIX = "JSON only. No markdown or extra text."
+
+
+def _default_check(prompt):
+    return (
+        "Verify that the task below has been completed in line with the original intent.\n"
+        f"Task:\n{prompt}"
+    )
+
+
+def _build_check_prompt(check):
+    return f"{_CHECK_PREFIX}\n\n{check}\n\n{_CHECK_SUFFIX}"
+
+
+def _check_result(output):
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        return False, f"Checker returned invalid JSON: {exc}"
+
+    if not isinstance(data, dict):
+        return False, "Checker JSON must be an object."
+
+    success = data.get("success")
+    reason = data.get("reason")
+    if not isinstance(success, bool):
+        return False, "Checker JSON missing boolean 'success'."
+    if not isinstance(reason, str):
+        return False, "Checker JSON missing string 'reason'."
+
+    return success, reason.strip()
+
+
+def _fix_prompt(error):
+    return (
+        "The verification check failed:\n"
+        f"{error}\n\n"
+        "Please fix the issues while staying close to the original intent."
+    )
+
+
+def _success_prompt():
+    return "Verified. Please summarize what you did."
+
+
+def _failure_prompt(error):
+    return (
+        "We ran out of attempts. Summarize what you did and what is still failing.\n\n"
+        f"Outstanding issues:\n{error}"
+    )
+
+
+class TaskFailed(RuntimeError):
+    """Raised when a task hits the maximum attempts without success."""
+
+    def __init__(self, summary, attempts=None, errors=None):
+        message = "Task failed after maximum attempts."
+        if summary:
+            message = f"{message}\n{summary}"
+        super().__init__(message)
+        self.summary = summary
+        self.attempts = attempts
+        self.errors = errors
+
+
+def task(
+    prompt,
+    check=None,
+    n=10,
+    cwd=None,
+    yolo=False,
+    flags=None,
+):
+    """Run a prompt with optional checker-driven retries.
+
+    Args:
+        prompt: The task prompt to run.
+        check: False to skip verification, None for the default check, or
+            a string check prompt.
+        n: Maximum number of retries after a failed check.
+        cwd: Optional working directory for the Codex session.
+        yolo: Whether to pass --yolo to Codex.
+        flags: Additional raw CLI flags to pass to Codex.
+
+    Returns:
+        The agent's response text when the task succeeds.
+
+    Raises:
+        TaskFailed: when the task reaches the maximum attempts without success.
+    """
+    result = task_result(prompt, check, n, cwd, yolo, flags)
+    if result.success:
+        return result.summary
+    raise TaskFailed(result.summary, result.attempts, result.errors)
+
+
+def task_result(
+    prompt,
+    check=None,
+    n=10,
+    cwd=None,
+    yolo=False,
+    flags=None,
+):
+    """Run a prompt with optional checker-driven retries and return TaskResult."""
+    if check is False:
+        runner = Agent(cwd, yolo, None, flags)
+        summary = runner(prompt)
+        return TaskResult(True, summary, 1, None, runner.thread_id)
+    if check is None:
+        check = _default_check(prompt)
+    if not isinstance(check, str):
+        raise TypeError("check must be a string or False")
+    if n < 0:
+        raise ValueError("n must be >= 0")
+
+    runner = Agent(cwd, yolo, None, flags)
+    checker = Agent(cwd, yolo, None, flags)
+
+    runner(prompt)
+    check_prompt = _build_check_prompt(check)
+
+    for attempt in range(n + 1):
+        success, reason = _check_result(checker(check_prompt))
+        if success:
+            summary = runner(_success_prompt())
+            return TaskResult(
+                True,
+                summary,
+                attempt + 1,
+                None,
+                runner.thread_id,
+            )
+        if attempt == n:
+            summary = runner(_failure_prompt(reason))
+            return TaskResult(
+                False,
+                summary,
+                attempt + 1,
+                reason,
+                runner.thread_id,
+            )
+        runner(_fix_prompt(reason))
 
 
 class TaskResult:
@@ -48,7 +198,6 @@ class Task:
         yolo=False,
         thread_id=None,
         flags=None,
-        full_auto=True,
     ):
         if max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
@@ -56,11 +205,10 @@ class Task:
         self.max_attempts = max_attempts
         self.cwd = cwd
         self.agent = Agent(
-            cwd=cwd,
-            yolo=yolo,
-            thread_id=thread_id,
-            flags=flags,
-            full_auto=full_auto,
+            cwd,
+            yolo,
+            thread_id,
+            flags,
         )
 
     def set_up(self):

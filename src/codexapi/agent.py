@@ -8,7 +8,7 @@ import subprocess
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 
 
-def agent(prompt, cwd=None, yolo=False, flags=None, full_auto=False):
+def agent(prompt, cwd=None, yolo=False, flags=None):
     """Run a single Codex turn and return only the agent's message.
 
     Args:
@@ -20,14 +20,7 @@ def agent(prompt, cwd=None, yolo=False, flags=None, full_auto=False):
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
-    message, _thread_id = _run_codex(
-        prompt,
-        cwd,
-        thread_id=None,
-        yolo=yolo,
-        flags=flags,
-        full_auto=full_auto,
-    )
+    message, _thread_id = _run_codex(prompt, cwd, None, yolo, flags)
     return message
 
 
@@ -46,7 +39,6 @@ class Agent:
         yolo=False,
         thread_id=None,
         flags=None,
-        full_auto=False,
     ):
         """Create a new session wrapper.
 
@@ -60,7 +52,6 @@ class Agent:
         self.cwd = cwd
         self._yolo = yolo
         self._flags = flags
-        self._full_auto = full_auto
         self.thread_id = thread_id
 
     def __call__(self, prompt):
@@ -71,14 +62,13 @@ class Agent:
             self.thread_id,
             self._yolo,
             self._flags,
-            self._full_auto,
         )
         if thread_id:
             self.thread_id = thread_id
         return message
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags, full_auto):
+def _run_codex(prompt, cwd, thread_id, yolo, flags):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -87,11 +77,10 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, full_auto):
         "--color",
         "never",
         "--skip-git-repo-check",
+        "--full-auto",
     ]
     if yolo:
         command.append("--yolo")
-    if full_auto:
-        command.append("--full-auto")
     if flags:
         command.extend(shlex.split(flags))
     if cwd:

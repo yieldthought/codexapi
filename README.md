@@ -44,9 +44,27 @@ result = task()
 print(result.success, result.summary)
 ```
 
+## CLI
+
+After installing, use the `codexapi` command:
+
+```bash
+codexapi "Summarize this repo."
+codexapi --cwd /path/to/project "Fix the failing tests."
+echo "Say hello." | codexapi
+```
+
+Task mode exits with code 0 on success and 1 on failure, printing the summary.
+
+Resume a session and print the thread id to stderr:
+
+```bash
+codexapi --thread-id THREAD_ID --print-thread-id "Continue where we left off."
+```
+
 ## API
 
-### `agent(prompt, cwd=None, yolo=False, flags=None, full_auto=False) -> str`
+### `agent(prompt, cwd=None, yolo=False, flags=None) -> str`
 
 Runs a single Codex turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -55,9 +73,8 @@ items are filtered out.
 - `cwd` (str | PathLike | None): working directory for the Codex session.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `flags` (str | None): extra CLI flags to pass to Codex.
-- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
-### `Agent(cwd=None, yolo=False, thread_id=None, flags=None, full_auto=False)`
+### `Agent(cwd=None, yolo=False, thread_id=None, flags=None)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -66,9 +83,21 @@ the same conversation and returns only the agent's message.
 - `thread_id -> str | None`: expose the underlying session id once created.
 - `yolo` (bool): pass `--yolo` to Codex when true.
 - `flags` (str | None): extra CLI flags to pass to Codex.
-- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
-### `Task(prompt, max_attempts=10, cwd=None, yolo=False, thread_id=None, flags=None, full_auto=True)`
+### `task(prompt, check=None, n=10, cwd=None, yolo=False, flags=None) -> str`
+
+Runs a task with checker-driven retries and returns the success summary.
+Raises `TaskFailed` when the maximum attempts are reached.
+
+- `check` (str | None | False): custom check prompt, default checker, or `False` to skip.
+- `n` (int): maximum number of retries after a failed check.
+
+### `task_result(prompt, check=None, n=10, cwd=None, yolo=False, flags=None) -> TaskResult`
+
+Runs a task with checker-driven retries and returns a `TaskResult` without
+raising `TaskFailed`.
+
+### `Task(prompt, max_attempts=10, cwd=None, yolo=False, thread_id=None, flags=None)`
 
 Runs a Codex task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
@@ -80,7 +109,6 @@ Runs a Codex task with checker-driven retries. Subclass it and implement
 - `check() -> str | None`: return an error description or `None`/`""`.
 - `on_success(result)`: optional success hook.
 - `on_failure(result)`: optional failure hook.
-- `full_auto` (bool): enable `--full-auto` for workspace-write and on-request approvals.
 
 ### `TaskResult(success, summary, attempts, errors, thread_id)`
 
@@ -92,10 +120,19 @@ Simple result object returned by `Task.__call__`.
 - `errors` (str | None): last checker error, if any.
 - `thread_id` (str | None): Codex thread id for the session.
 
+### `TaskFailed`
+
+Exception raised by `task()` when retries are exhausted.
+
+- `summary` (str): failure summary text.
+- `attempts` (int | None): attempts made when the task failed.
+- `errors` (str | None): last checker error, if any.
+
 ## Behavior notes
 
 - Uses `codex exec --json` and parses JSONL events for `agent_message` items.
 - Automatically passes `--skip-git-repo-check` so it can run outside a git repo.
+- Always passes `--full-auto` for workspace-write and on-request approvals.
 - Passes `--yolo` when enabled (use with care).
 - Raises `RuntimeError` if Codex exits non-zero or returns no agent message.
 
