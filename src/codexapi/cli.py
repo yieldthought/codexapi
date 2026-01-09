@@ -224,19 +224,20 @@ def _is_session_file(path, root_str):
 
 def _list_codex_processes():
     result = subprocess.run(
-        ["ps", "-ax", "-o", "pid=,ppid=,comm=,args="],
+        ["ps", "-ax", "-o", "pid=,ppid=,uid=,comm=,args="],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         return []
+    current_uid = os.getuid()
     processes = []
     for line in result.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
-        parts = line.split(None, 3)
-        if len(parts) < 3:
+        parts = line.split(None, 4)
+        if len(parts) < 4:
             continue
         try:
             pid = int(parts[0])
@@ -246,8 +247,14 @@ def _list_codex_processes():
             ppid = int(parts[1])
         except ValueError:
             continue
-        comm = parts[2]
-        args = parts[3] if len(parts) > 3 else ""
+        try:
+            uid = int(parts[2])
+        except ValueError:
+            continue
+        if uid != current_uid:
+            continue
+        comm = parts[3]
+        args = parts[4] if len(parts) > 4 else ""
         if comm == "codex" or re.search(r"(^|[\\s/])codex(\\s|$)", args):
             processes.append({"pid": pid, "ppid": ppid, "comm": comm, "args": args})
     return processes
@@ -273,7 +280,11 @@ def _process_session_files(pid, root):
 
     proc_fd = Path(f"/proc/{pid}/fd")
     if proc_fd.exists():
-        for entry in proc_fd.iterdir():
+        try:
+            entries = list(proc_fd.iterdir())
+        except OSError:
+            return paths
+        for entry in entries:
             try:
                 target = os.readlink(entry)
             except OSError:
