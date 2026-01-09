@@ -36,6 +36,7 @@ _COLUMN_TITLES = {
     "tok": "TOK/S",
     "in": "IN",
     "out": "OUT",
+    "turn": "TURN",
     "model": "MODEL",
     "effort": "EFF",
     "perm": "PERM",
@@ -309,6 +310,24 @@ def _format_token_total(value):
     return str(value)
 
 
+def _format_duration(seconds):
+    if seconds is None:
+        return "-"
+    if seconds < 0:
+        return "-"
+    total = int(seconds)
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d{hours:02d}h"
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
 def _summarize_session(path, mtime):
     prompt = None
     prompt_fallback = None
@@ -569,6 +588,7 @@ def _layout_columns(width, id_width, show):
         ("tok", ">"),
         ("in", ">"),
         ("out", ">"),
+        ("turn", ">"),
     ]
     widths = {
         "id": id_width,
@@ -576,6 +596,7 @@ def _layout_columns(width, id_width, show):
         "tok": 7,
         "in": 7,
         "out": 7,
+        "turn": 7,
     }
     mins = {}
 
@@ -638,6 +659,16 @@ def _format_session(session, layout):
     status = "RUN" if session.get("status") == "running" else "IDLE"
     tok_s = session["tok_s"]
     tok_s_str = "-" if tok_s is None else f"{tok_s:5.1f}"
+    last_user_ts = session.get("last_user_ts")
+    last_agent_ts = session.get("last_agent_ts")
+    if status == "RUN":
+        turn_seconds = (datetime.now() - last_user_ts).total_seconds() if last_user_ts else None
+    else:
+        if last_user_ts and last_agent_ts:
+            turn_seconds = (last_agent_ts - last_user_ts).total_seconds()
+        else:
+            turn_seconds = None
+    turn_str = _format_duration(turn_seconds)
     meta = session.get("meta") or {}
     model = meta.get("model") or meta.get("model_provider") or "-"
     effort = meta.get("effort") or "-"
@@ -655,6 +686,7 @@ def _format_session(session, layout):
         "tok": tok_s_str,
         "in": total_in,
         "out": total_out,
+        "turn": turn_str,
         "model": _truncate_head(str(model), widths.get("model", 0)),
         "effort": _truncate_head(str(effort), widths.get("effort", 0)),
         "perm": _truncate_head(str(perm), widths.get("perm", 0)),
