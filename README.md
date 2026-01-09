@@ -132,7 +132,7 @@ Exception raised by `task()` when retries are exhausted.
 
 - Uses `codex exec --json` and parses JSONL events for `agent_message` items.
 - Automatically passes `--skip-git-repo-check` so it can run outside a git repo.
-- Always passes `--full-auto` for workspace-write and on-request approvals.
+- Passes `--full-auto` unless `--yolo` is enabled.
 - Passes `--yolo` when enabled (use with care).
 - Raises `RuntimeError` if Codex exits non-zero or returns no agent message.
 

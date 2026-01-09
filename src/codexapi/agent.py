@@ -77,10 +77,11 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags):
         "--color",
         "never",
         "--skip-git-repo-check",
-        "--full-auto",
     ]
     if yolo:
         command.append("--yolo")
+    else:
+        command.append("--full-auto")
     if flags:
         command.extend(shlex.split(flags))
     if cwd:
