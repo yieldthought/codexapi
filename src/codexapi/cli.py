@@ -948,6 +948,11 @@ def main(argv=None):
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
+    task_parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print progress after each verification round.",
+    )
 
     ralph_parser = subparsers.add_parser(
         "ralph",
@@ -1039,6 +1044,7 @@ def main(argv=None):
                 args.cwd,
                 args.yolo,
                 args.flags,
+                args.progress,
             )
         except TaskFailed as exc:
             message = exc.summary

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 
 from .agent import Agent, agent
 
@@ -15,6 +16,12 @@ _CHECK_PREFIX = (
     "Set success to true only if everything matches the intent."
 )
 _CHECK_SUFFIX = "JSON only. No markdown or extra text."
+_PROGRESS_PROMPT = (
+    "Summarize the outputs below in one line each.\n"
+    "Return only JSON with keys: agent (string) and check (string).\n"
+    "Each value must be a single line with no newlines.\n"
+    "Do not run commands or change any files."
+)
 
 
 def _default_check(prompt):
@@ -29,6 +36,16 @@ def _default_check(prompt):
 
 def _build_check_prompt(check):
     return f"{_CHECK_PREFIX}\n\n{check}\n\n{_CHECK_SUFFIX}"
+
+
+def _build_progress_prompt(agent_output, check_output):
+    return (
+        f"{_PROGRESS_PROMPT}\n\n"
+        "AGENT OUTPUT:\n"
+        f"{agent_output}\n\n"
+        "CHECK OUTPUT:\n"
+        f"{check_output}"
+    )
 
 
 def _check_result(output):
@@ -49,6 +66,78 @@ def _check_result(output):
 
     return success, reason.strip()
 
+
+def _progress_result(output):
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Progress summary returned invalid JSON: {exc}"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise RuntimeError("Progress summary JSON must be an object.")
+
+    agent_summary = data.get("agent")
+    check_summary = data.get("check")
+    if not isinstance(agent_summary, str):
+        raise RuntimeError("Progress summary JSON missing string 'agent'.")
+    if not isinstance(check_summary, str):
+        raise RuntimeError("Progress summary JSON missing string 'check'.")
+
+    return _single_line(agent_summary), _single_line(check_summary)
+
+
+def _single_line(text):
+    if not text:
+        return ""
+    return " ".join(text.replace("\r", " ").split())
+
+
+def _format_duration(seconds):
+    if seconds < 0:
+        seconds = 0
+    seconds = int(round(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or hours:
+        parts.append(f"{minutes}m")
+    if not hours:
+        parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
+def _print_progress(
+    attempt,
+    total,
+    start_time,
+    agent_output,
+    check_output,
+    cwd,
+    yolo,
+    flags,
+):
+    elapsed = time.monotonic() - start_time
+    remaining = 0
+    if attempt:
+        remaining = (elapsed / attempt) * (total - attempt)
+
+    summary_prompt = _build_progress_prompt(agent_output, check_output)
+    summary = agent(summary_prompt, cwd, yolo, flags)
+    agent_summary, check_summary = _progress_result(summary)
+
+    elapsed_text = _format_duration(elapsed)
+    remaining_text = _format_duration(remaining)
+    print(
+        f"Round {attempt}/{total} ({elapsed_text} elapsed, {remaining_text} remaining)",
+        flush=True,
+    )
+    print(f"Agent: {agent_summary}", flush=True)
+    print(f"Check: {check_summary}", flush=True)
+    print("", flush=True)
 
 def _fix_prompt(error):
     return (
@@ -89,6 +178,7 @@ def task(
     cwd=None,
     yolo=False,
     flags=None,
+    progress=False,
 ):
     """Run a prompt with optional checker-driven retries.
 
@@ -100,6 +190,7 @@ def task(
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
         flags: Additional raw CLI flags to pass to Codex.
+        progress: Whether to print progress after each verification round.
 
     Returns:
         The agent's response text when the task succeeds.
@@ -107,7 +198,7 @@ def task(
     Raises:
         TaskFailed: when the task reaches the maximum attempts without success.
     """
-    result = task_result(prompt, check, n, cwd, yolo, flags)
+    result = task_result(prompt, check, n, cwd, yolo, flags, progress)
     if result.success:
         return result.summary
     raise TaskFailed(result.summary, result.attempts, result.errors)
@@ -120,15 +211,28 @@ def task_result(
     cwd=None,
     yolo=False,
     flags=None,
+    progress=False,
 ):
     """Run a prompt with optional checker-driven retries and return TaskResult.
 
     The runner keeps a single session. Each verification attempt uses a fresh,
-    stateless agent call.
+    stateless agent call. When progress is True, print a summary each round.
     """
     if check is False:
         runner = Agent(cwd, yolo, None, flags)
+        start_time = time.monotonic()
         summary = runner(prompt)
+        if progress:
+            _print_progress(
+                1,
+                1,
+                start_time,
+                summary,
+                "Verification skipped.",
+                cwd,
+                yolo,
+                flags,
+            )
         return TaskResult(True, summary, 1, None, runner.thread_id)
     if check is None:
         check = _default_check(prompt)
@@ -138,11 +242,24 @@ def task_result(
         raise ValueError("n must be >= 0")
 
     runner = Agent(cwd, yolo, None, flags)
-    runner(prompt)
+    start_time = time.monotonic()
+    last_output = runner(prompt)
     check_prompt = _build_check_prompt(check)
 
     for attempt in range(n + 1):
-        success, reason = _check_result(agent(check_prompt, cwd, yolo, flags))
+        check_output = agent(check_prompt, cwd, yolo, flags)
+        success, reason = _check_result(check_output)
+        if progress:
+            _print_progress(
+                attempt + 1,
+                n + 1,
+                start_time,
+                last_output,
+                check_output,
+                cwd,
+                yolo,
+                flags,
+            )
         if success:
             summary = runner(_success_prompt())
             return TaskResult(
@@ -161,7 +278,7 @@ def task_result(
                 reason,
                 runner.thread_id,
             )
-        runner(_fix_prompt(reason))
+        last_output = runner(_fix_prompt(reason))
 
 
 class TaskResult:
