@@ -3,12 +3,14 @@
 import json
 import logging
 
-from .agent import Agent
+from .agent import Agent, agent
 
 _logger = logging.getLogger(__name__)
 
 _CHECK_PREFIX = (
-    "You are a verification agent. Evaluate the workspace against the check below.\n"
+    "You are a verification agent. Explore this workspace and carefully evaluate it "
+    "against the check below. Collect evidence by running any tests and/or reading "
+    "and tracing through code, but do not change any of the code.\n"
     "Return only JSON with keys: success (boolean) and reason (string).\n"
     "Set success to true only if everything matches the intent."
 )
@@ -18,7 +20,10 @@ _CHECK_SUFFIX = "JSON only. No markdown or extra text."
 def _default_check(prompt):
     return (
         "Verify that the task below has been completed in line with the original intent.\n"
-        f"Task:\n{prompt}"
+        "Task:\n"
+        "```\n"
+        f"{prompt}\n"
+        "```"
     )
 
 
@@ -116,7 +121,11 @@ def task_result(
     yolo=False,
     flags=None,
 ):
-    """Run a prompt with optional checker-driven retries and return TaskResult."""
+    """Run a prompt with optional checker-driven retries and return TaskResult.
+
+    The runner keeps a single session. Each verification attempt uses a fresh,
+    stateless agent call.
+    """
     if check is False:
         runner = Agent(cwd, yolo, None, flags)
         summary = runner(prompt)
@@ -129,13 +138,11 @@ def task_result(
         raise ValueError("n must be >= 0")
 
     runner = Agent(cwd, yolo, None, flags)
-    checker = Agent(cwd, yolo, None, flags)
-
     runner(prompt)
     check_prompt = _build_check_prompt(check)
 
     for attempt in range(n + 1):
-        success, reason = _check_result(checker(check_prompt))
+        success, reason = _check_result(agent(check_prompt, cwd, yolo, flags))
         if success:
             summary = runner(_success_prompt())
             return TaskResult(
