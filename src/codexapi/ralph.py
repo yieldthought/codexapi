@@ -135,7 +135,7 @@ def run_ralph_loop(
             elif runner is None:
                 runner = Agent(cwd, yolo, None, flags)
 
-            message = runner(prompt)
+            message = runner(prompt + '\nIf there are multiple paths forward, please use your own best judgement as to which to try first - I trust you!\n')
             print(message)
             last_message = message
 

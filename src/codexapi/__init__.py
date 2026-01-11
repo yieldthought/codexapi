@@ -12,4 +12,4 @@ __all__ = [
     "task",
     "task_result",
 ]
-__version__ = "0.3.3"
+__version__ = "0.3.4"
