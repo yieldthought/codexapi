@@ -8,7 +8,7 @@ import subprocess
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 
 
-def agent(prompt, cwd=None, yolo=False, flags=None):
+def agent(prompt, cwd=None, yolo=True, flags=None):
     """Run a single Codex turn and return only the agent's message.
 
     Args:
@@ -36,7 +36,7 @@ class Agent:
     def __init__(
         self,
         cwd=None,
-        yolo=False,
+        yolo=True,
         thread_id=None,
         flags=None,
     ):

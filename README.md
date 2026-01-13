@@ -73,6 +73,8 @@ Resume a session and print the thread id to stderr:
 codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off."
 ```
 
+Use `--no-yolo` to run Codex with `--full-auto` instead.
+
 Ralph loop mode repeats the same prompt until a completion promise or a max
 iteration cap is hit (0 means unlimited). Cancel by deleting
 `.codexapi/ralph-loop.local.md` or running `codexapi ralph --cancel`.
@@ -85,27 +87,27 @@ codexapi ralph --cancel --cwd /path/to/project
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=False, flags=None) -> str`
+### `agent(prompt, cwd=None, yolo=True, flags=None) -> str`
 
 Runs a single Codex turn and returns only the agent's message. Any reasoning
 items are filtered out.
 
 - `prompt` (str): prompt to send to Codex.
 - `cwd` (str | PathLike | None): working directory for the Codex session.
-- `yolo` (bool): pass `--yolo` to Codex when true.
+- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
 
-### `Agent(cwd=None, yolo=False, thread_id=None, flags=None)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
 
 - `__call__(prompt) -> str`: send a prompt to Codex and return the message.
 - `thread_id -> str | None`: expose the underlying session id once created.
-- `yolo` (bool): pass `--yolo` to Codex when true.
+- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
 
-### `task(prompt, check=None, n=10, cwd=None, yolo=False, flags=None) -> str`
+### `task(prompt, check=None, n=10, cwd=None, yolo=True, flags=None) -> str`
 
 Runs a task with checker-driven retries and returns the success summary.
 Raises `TaskFailed` when the maximum attempts are reached.
@@ -113,12 +115,12 @@ Raises `TaskFailed` when the maximum attempts are reached.
 - `check` (str | None | False): custom check prompt, default checker, or `False` to skip.
 - `n` (int): maximum number of retries after a failed check.
 
-### `task_result(prompt, check=None, n=10, cwd=None, yolo=False, flags=None) -> TaskResult`
+### `task_result(prompt, check=None, n=10, cwd=None, yolo=True, flags=None) -> TaskResult`
 
 Runs a task with checker-driven retries and returns a `TaskResult` without
 raising `TaskFailed`.
 
-### `Task(prompt, max_attempts=10, cwd=None, yolo=False, thread_id=None, flags=None)`
+### `Task(prompt, max_attempts=10, cwd=None, yolo=True, thread_id=None, flags=None)`
 
 Runs a Codex task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
@@ -153,8 +155,7 @@ Exception raised by `task()` when retries are exhausted.
 
 - Uses `codex exec --json` and parses JSONL events for `agent_message` items.
 - Automatically passes `--skip-git-repo-check` so it can run outside a git repo.
-- Passes `--full-auto` unless `--yolo` is enabled.
-- Passes `--yolo` when enabled (use with care).
+- Passes `--yolo` by default (use `--no-yolo` or `yolo=False` for `--full-auto`).
 - Raises `RuntimeError` if Codex exits non-zero or returns no agent message.
 
 ## Configuration

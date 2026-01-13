@@ -15,7 +15,7 @@ _PROMISE_RE = re.compile(r"<promise>(.*?)</promise>", re.DOTALL)
 def run_ralph_loop(
     prompt,
     cwd=None,
-    yolo=False,
+    yolo=True,
     flags=None,
     max_iterations=0,
     completion_promise=None,
@@ -135,7 +135,7 @@ def run_ralph_loop(
             elif runner is None:
                 runner = Agent(cwd, yolo, None, flags)
 
-            message = runner(prompt + '\nIf there are multiple paths forward, please use your own best judgement as to which to try first - I trust you!\n')
+            message = runner(prompt + '\nIf there are multiple paths forward, you MUST use your own best judgement as to which to try first! Do not ask the user to choose an option, they hereby give you explciit permission to pick the best one yourself.\n')
             print(message)
             last_message = message
 

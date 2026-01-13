@@ -176,7 +176,7 @@ def task(
     check=None,
     n=10,
     cwd=None,
-    yolo=False,
+    yolo=True,
     flags=None,
     progress=False,
 ):
@@ -209,7 +209,7 @@ def task_result(
     check=None,
     n=10,
     cwd=None,
-    yolo=False,
+    yolo=True,
     flags=None,
     progress=False,
 ):
@@ -319,7 +319,7 @@ class Task:
         prompt,
         max_attempts=10,
         cwd=None,
-        yolo=False,
+        yolo=True,
         thread_id=None,
         flags=None,
     ):

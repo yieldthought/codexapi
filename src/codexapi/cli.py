@@ -908,7 +908,12 @@ def main(argv=None):
         help="Prompt to send. Use '-' or omit to read from stdin.",
     )
     run_parser.add_argument("--cwd", help="Working directory for the Codex session.")
-    run_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    run_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
     run_parser.add_argument(
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
@@ -943,7 +948,12 @@ def main(argv=None):
         help="Max verification retries after a failed check (0 means no retries).",
     )
     task_parser.add_argument("--cwd", help="Working directory for the Codex session.")
-    task_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    task_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
     task_parser.add_argument(
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
@@ -986,7 +996,12 @@ def main(argv=None):
         help="Start each iteration with a fresh Agent context.",
     )
     ralph_parser.add_argument("--cwd", help="Working directory for the Codex session.")
-    ralph_parser.add_argument("--yolo", action="store_true", help="Pass --yolo to Codex.")
+    ralph_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
     ralph_parser.add_argument(
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
