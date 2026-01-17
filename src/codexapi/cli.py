@@ -12,8 +12,10 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import Agent, agent
+from .foreach import foreach
 from .ralph import cancel_ralph_loop, run_ralph_loop
 from .task import TaskFailed, task
+from .taskfile import AutoTask, load_task_file
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -38,6 +40,7 @@ _COLUMN_TITLES = {
     "in": "IN",
     "out": "OUT",
     "turn": "TURN",
+    "turns": "NTRN",
     "model": "MODEL",
     "effort": "EFF",
     "perm": "PERM",
@@ -119,6 +122,27 @@ def _tail_lines(path):
             data = parts[1]
     text = data.decode("utf-8", errors="replace")
     return text.splitlines()
+
+
+def _count_turns(path):
+    event_count = 0
+    response_count = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if "\"type\":\"event_msg\"" in line and "\"type\":\"user_message\"" in line:
+                    event_count += 1
+                    continue
+                if "\"type\":\"response_item\"" in line and "\"role\":\"user\"" in line and "\"type\":\"message\"" in line:
+                    response_count += 1
+    except OSError:
+        return None
+
+    if event_count:
+        return event_count
+    if response_count:
+        return response_count
+    return None
 
 
 def _extract_text(content):
@@ -364,6 +388,7 @@ def _summarize_session(path, mtime):
     total_usage = None
     meta = {}
     subagent = None
+    turns = _count_turns(path)
 
     for line in _tail_lines(path):
         try:
@@ -485,6 +510,7 @@ def _summarize_session(path, mtime):
         "last_user_ts": last_user_ts,
         "last_agent_ts": last_agent_ts,
         "last_event_kind": last_event_kind,
+        "turns": turns,
         "meta": meta,
     }
 
@@ -604,6 +630,7 @@ def _layout_columns(width, id_width, show):
         ("in", ">"),
         ("out", ">"),
         ("turn", ">"),
+        ("turns", ">"),
     ]
     widths = {
         "id": id_width,
@@ -612,6 +639,7 @@ def _layout_columns(width, id_width, show):
         "in": 7,
         "out": 7,
         "turn": 7,
+        "turns": 5,
     }
     mins = {}
 
@@ -684,6 +712,8 @@ def _format_session(session, layout):
         else:
             turn_seconds = None
     turn_str = _format_duration(turn_seconds)
+    turns = session.get("turns")
+    turns_str = "-" if turns is None else str(turns)
     meta = session.get("meta") or {}
     model = meta.get("model") or meta.get("model_provider") or "-"
     effort = meta.get("effort") or "-"
@@ -702,6 +732,7 @@ def _format_session(session, layout):
         "in": total_in,
         "out": total_out,
         "turn": turn_str,
+        "turns": _truncate_head(str(turns_str), widths.get("turns", 0)),
         "model": _truncate_head(str(model), widths.get("model", 0)),
         "effort": _truncate_head(str(effort), widths.get("effort", 0)),
         "perm": _truncate_head(str(perm), widths.get("perm", 0)),
@@ -933,6 +964,11 @@ def main(argv=None):
         help="Run a task with verification retries.",
     )
     task_parser.add_argument(
+        "-f",
+        "--task-file",
+        help="YAML task file to run.",
+    )
+    task_parser.add_argument(
         "prompt",
         nargs="?",
         help="Prompt to send. Use '-' or omit to read from stdin.",
@@ -944,8 +980,8 @@ def main(argv=None):
     task_parser.add_argument(
         "--max-iterations",
         type=int,
-        default=10,
-        help="Max verification retries after a failed check (0 means no retries).",
+        default=None,
+        help="Max verification retries after a failed check (0 means no retries). Defaults to 10.",
     )
     task_parser.add_argument("--cwd", help="Working directory for the Codex session.")
     task_parser.add_argument(
@@ -1007,6 +1043,35 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
 
+    foreach_parser = subparsers.add_parser(
+        "foreach",
+        help="Run a task file over a list file.",
+    )
+    foreach_parser.add_argument(
+        "list_file",
+        help="Path to the list file to process.",
+    )
+    foreach_parser.add_argument(
+        "task_file",
+        help="Path to the YAML task file.",
+    )
+    foreach_parser.add_argument(
+        "-n",
+        type=int,
+        help="Limit parallelism to N.",
+    )
+    foreach_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    foreach_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
+    foreach_parser.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+    )
+
     subparsers.add_parser(
         "top",
         help="Show running Codex sessions.",
@@ -1020,6 +1085,21 @@ def main(argv=None):
         _run_top([])
         return
 
+    if args.command == "foreach":
+        if args.n is not None and args.n < 1:
+            raise SystemExit("-n must be >= 1.")
+        result = foreach(
+            args.list_file,
+            args.task_file,
+            args.n,
+            args.cwd,
+            args.yolo,
+            args.flags,
+        )
+        if result.failed:
+            raise SystemExit(1)
+        return
+
     if args.command == "ralph":
         if args.cancel:
             if args.prompt:
@@ -1030,6 +1110,29 @@ def main(argv=None):
                 raise SystemExit("--max-iterations is not allowed with --cancel.")
             print(cancel_ralph_loop(args.cwd))
             return
+
+    if args.command == "task" and args.task_file:
+        if args.prompt:
+            raise SystemExit("task -f does not take a prompt.")
+        if args.check is not None:
+            raise SystemExit("--check is not allowed with -f.")
+        if args.max_iterations is not None:
+            raise SystemExit("--max-iterations is not allowed with -f.")
+        task_def = load_task_file(args.task_file)
+        task_runner = AutoTask(
+            task_def,
+            None,
+            10,
+            args.cwd,
+            args.yolo,
+            None,
+            args.flags,
+        )
+        result = task_runner()
+        print(result.summary)
+        if not result.success:
+            raise SystemExit(1)
+        return
 
     prompt = _read_prompt(args.prompt)
     exit_code = 0
@@ -1048,6 +1151,8 @@ def main(argv=None):
         )
         return
     if args.command == "task":
+        if args.max_iterations is None:
+            args.max_iterations = 10
         if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
         check = args.check if args.check is not None else prompt

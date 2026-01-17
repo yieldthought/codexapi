@@ -142,9 +142,11 @@ def _print_progress(
 
 def _fix_prompt(error):
     return (
-        "The verification check failed:\n"
+        "Thanks for your work. An automated verifier reported these issues:\n"
         f"{error}\n\n"
-        "Please fix the issues while staying close to the original intent."
+        "Take another look and see whether you agree and, if so, please take this "
+        "feedback into consideration and use it to continue to make progress "
+        "towards our original goal and intent."
     )
 
 
@@ -329,6 +331,7 @@ class Task:
         self.prompt = prompt
         self.max_attempts = max_attempts
         self.cwd = cwd
+        self.last_output = None
         self.agent = Agent(
             cwd,
             yolo,
@@ -342,8 +345,9 @@ class Task:
     def tear_down(self):
         """Delete the directory etc."""
 
-    def check(self):
+    def check(self, output=None):
         """ Check if the task is done, return a string describing the problems if not.
+            The output argument is the last agent response.
             This can be any combination of running tests, python code or running an agent
             with a specific prompt in self.cwd.
          """
@@ -357,9 +361,11 @@ class Task:
     def fix_prompt(self, error):
         """Build a prompt that asks the agent to fix checker failures."""
         return (
-            "The following checks failed:\n"
+            "Thanks for your work. An automated verifier reported these issues:\n"
             f"{error}\n\n"
-            "Can you please dive in and see if you agree with this assessment, then fix these issues while staying as close as you can to the spirit of the original task?"
+            "Take another look and see whether you agree and, if so, please take "
+            "this feedback into consideration and use it to continue to make "
+            "progress towards our original goal and intent."
         )
 
     def success_prompt(self):
@@ -383,18 +389,20 @@ class Task:
 
             # Start with the initial prompt
             output = self.agent(self.prompt)
+            self.last_output = output
             if debug:
                 _logger.debug("Initial output: %s", output)
             
             # Try correcting it up to max_attempts times
             for attempt in range(self.max_attempts):
-                error = self.check()
+                error = self.check(self.last_output)
                 if debug:
                     _logger.debug("Check error: %s", error)
                     
                 if error:
                     # if there were errors, tell the agent to fix them
                     output = self.agent(self.fix_prompt(error))
+                    self.last_output = output
                     if debug:
                         _logger.debug("Fix output: %s", output)
                 else:

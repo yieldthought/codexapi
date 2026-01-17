@@ -31,7 +31,7 @@ class HelloWorldTask(Task):
             self._tmpdir = None
             logger.debug("tear_down: deleted %s", self.cwd)
 
-    def check(self):
+    def check(self, output=None):
         logger.debug("check: checking %s contains hello.py", self.cwd)
         hello_path = os.path.join(self.cwd, "hello.py")
         if not os.path.exists(hello_path):

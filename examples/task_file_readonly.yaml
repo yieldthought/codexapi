@@ -1,0 +1,11 @@
+prompt: |
+  Summarize this repository in exactly three bullet points.
+  Do not edit any files or run commands that change the working tree.
+set_up: |
+  List the top-level files and folders.
+  Do not modify anything.
+check: |
+  Confirm the summary has exactly three bullets and mentions CodexAPI.
+  Return an empty string if OK, otherwise explain what is missing.
+on_success: "Acknowledge completion in one short sentence."
+tear_down: "No cleanup needed."

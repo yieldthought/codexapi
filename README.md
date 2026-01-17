@@ -58,6 +58,7 @@ echo "Say hello." | codexapi run
 
 ```bash
 codexapi task "Fix the failing tests." --max-iterations 5
+codexapi task -f task.yaml
 ```
 
 Show running sessions and their latest activity:
@@ -83,6 +84,13 @@ iteration cap is hit (0 means unlimited). Cancel by deleting
 codexapi ralph "Fix the bug." --completion-promise DONE --max-iterations 5
 codexapi ralph --ralph-fresh "Try again from scratch." --max-iterations 3
 codexapi ralph --cancel --cwd /path/to/project
+```
+
+Run a task file across a list file:
+
+```bash
+codexapi foreach list.txt task.yaml
+codexapi foreach list.txt task.yaml -n 4
 ```
 
 ## API
@@ -129,7 +137,7 @@ Runs a Codex task with checker-driven retries. Subclass it and implement
 - `__call__() -> TaskResult`: run the task.
 - `set_up()`: optional setup hook.
 - `tear_down()`: optional cleanup hook.
-- `check() -> str | None`: return an error description or `None`/`""`.
+- `check(output=None) -> str | None`: return an error description or `None`/`""`. `output` is the last agent response.
 - `on_success(result)`: optional success hook.
 - `on_failure(result)`: optional failure hook.
 
@@ -150,6 +158,26 @@ Exception raised by `task()` when retries are exhausted.
 - `summary` (str): failure summary text.
 - `attempts` (int | None): attempts made when the task failed.
 - `errors` (str | None): last checker error, if any.
+
+### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None) -> ForeachResult`
+
+Runs a task file over a list of items, updating the list file in place.
+
+- `list_file` (str | PathLike): path to the list file to process.
+- `task_file` (str | PathLike): YAML task file (must include `prompt`).
+- `n` (int | None): limit parallelism to N (default: run all items in parallel).
+- `cwd` (str | PathLike | None): working directory for the Codex session.
+- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
+- `flags` (str | None): extra CLI flags to pass to Codex.
+
+### `ForeachResult(succeeded, failed, skipped, results)`
+
+Simple result object returned by `foreach()`.
+
+- `succeeded` (int): number of successful items.
+- `failed` (int): number of failed items.
+- `skipped` (int): number of items skipped (already marked in the list file).
+- `results` (list[tuple]): `(item, success, summary)` entries for items that ran.
 
 ## Behavior notes
 

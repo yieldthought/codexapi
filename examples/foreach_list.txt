@@ -1,0 +1,5 @@
+README.md
+src/codexapi/agent.py
+ src/codexapi/task.py
+
+examples/task_file_readonly.yaml
