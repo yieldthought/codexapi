@@ -47,6 +47,8 @@ def run_ralph_loop(
         raise TypeError("completion_promise must be a string or None")
     if max_iterations < 0:
         raise ValueError("max_iterations must be >= 0")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
 
     state_path = _state_path(cwd)
     _ensure_state_dir(state_path)
