@@ -88,6 +88,14 @@ codexapi ralph --ralph-reuse "Try again from the same context." --max-iterations
 codexapi ralph --cancel --cwd /path/to/project
 ```
 
+Science mode wraps a short task in a science prompt and runs it through the
+Ralph loop. It defaults to `--yolo` and expects progress notes in `SCIENCE.md`.
+
+```bash
+codexapi science "hyper-optimize the kernel cycles"
+codexapi science --no-yolo "hyper-optimize the kernel cycles" --max-iterations 3
+```
+
 Run a task file across a list file:
 
 ```bash

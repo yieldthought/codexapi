@@ -24,6 +24,22 @@ _TAIL_BYTES = 256 * 1024
 _TAIL_MAX_BYTES = 4 * 1024 * 1024
 _TAIL_MIN_LINES = 200
 _ROLL_OUT_PREFIX = "rollout-"
+_SCIENCE_TEMPLATE = (
+    "Good afternoon! We have a fun task today - take a good look around this repo "
+    "and review all relevant knowledge you have. Our task is to {task}. We're "
+    "working step by step in a scientific manner so if there's a SCIENCE.md read "
+    "that first to understand the progress of the rest of the team so far. Then "
+    "try as hard as you can to find a good path forwards - run as many experiments "
+    "as you want and take your time, we have all night. Note down everything you "
+    "learn that wasn't obvious in a knowledge section in SCIENCE.md and any "
+    "experiments in a similar section. The aim is to move the ball forwards, "
+    "either by getting closer to the goal ruling out a hypothesis that doesn't "
+    "whilst understanding why. Try your best and have fun with this one! If you "
+    "think of several options, pick one and run with it - I will not be available "
+    "to make decisions for you, I give you my full permission to explore and make "
+    "your own best judgement towards our goal! Remember to update SCIENCE.md. "
+    "Good hunting!"
+)
 _TOOL_LABELS = {
     "apply_patch": "Editing files",
     "exec_command": "Running command",
@@ -62,6 +78,12 @@ def _single_line(text):
     if not text:
         return ""
     return " ".join(text.replace("\r", " ").split())
+
+
+def _science_prompt(task):
+    if not isinstance(task, str) or not task.strip():
+        raise SystemExit("Science task must be a non-empty string.")
+    return _SCIENCE_TEMPLATE.replace("{task}", task.strip())
 
 
 def _truncate_head(text, limit):
@@ -923,6 +945,11 @@ def main(argv=None):
         "  Default starts each iteration with a fresh Agent context; use --ralph-reuse\n"
         "  to reuse a single Codex thread across iterations.\n"
     )
+    science_help = (
+        "Science mode (science command):\n"
+        "  Wraps your short task in a science prompt and runs it via the Ralph loop.\n"
+        "  Default uses --yolo. Use --no-yolo to run --full-auto instead.\n"
+    )
     parser = argparse.ArgumentParser(
         prog="codexapi",
         description="Run Codex via the codexapi wrapper.",
@@ -1053,6 +1080,59 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
 
+    science_parser = subparsers.add_parser(
+        "science",
+        help="Run a science-mode Ralph loop.",
+        epilog=science_help,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    science_parser.add_argument(
+        "task",
+        nargs="?",
+        help="Short task description. Use '-' or omit to read from stdin.",
+    )
+    science_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Max iterations for the loop (0 means unlimited).",
+    )
+    science_parser.add_argument(
+        "--cancel",
+        action="store_true",
+        help="Cancel the Ralph loop state in the target cwd.",
+    )
+    science_parser.add_argument(
+        "--completion-promise",
+        help="Promise text to match in <promise>...</promise>.",
+    )
+    science_fresh_group = science_parser.add_mutually_exclusive_group()
+    science_fresh_group.add_argument(
+        "--ralph-fresh",
+        action="store_true",
+        dest="ralph_fresh",
+        default=None,
+        help="Start each iteration with a fresh Agent context (default).",
+    )
+    science_fresh_group.add_argument(
+        "--ralph-reuse",
+        action="store_false",
+        dest="ralph_fresh",
+        default=None,
+        help="Reuse the same Agent context each iteration.",
+    )
+    science_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    science_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
+    science_parser.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+    )
+
     foreach_parser = subparsers.add_parser(
         "foreach",
         help="Run a task file over a list file.",
@@ -1124,6 +1204,20 @@ def main(argv=None):
             return
         if args.ralph_fresh is None:
             args.ralph_fresh = True
+    if args.command == "science":
+        if args.cancel:
+            if args.task:
+                raise SystemExit("science --cancel takes no task.")
+            if args.completion_promise or args.ralph_fresh is not None:
+                raise SystemExit(
+                    "--completion-promise/--ralph-fresh/--ralph-reuse are not allowed with --cancel."
+                )
+            if args.max_iterations != 0:
+                raise SystemExit("--max-iterations is not allowed with --cancel.")
+            print(cancel_ralph_loop(args.cwd))
+            return
+        if args.ralph_fresh is None:
+            args.ralph_fresh = True
 
     if args.command == "task" and args.task_file:
         if args.prompt:
@@ -1148,7 +1242,12 @@ def main(argv=None):
             raise SystemExit(1)
         return
 
-    prompt = _read_prompt(args.prompt)
+    prompt_source = None
+    if args.command in ("run", "ralph", "task"):
+        prompt_source = args.prompt
+    elif args.command == "science":
+        prompt_source = args.task
+    prompt = _read_prompt(prompt_source)
     exit_code = 0
 
     if args.command == "ralph":
@@ -1156,6 +1255,20 @@ def main(argv=None):
             raise SystemExit("--max-iterations must be >= 0.")
         run_ralph_loop(
             prompt,
+            args.cwd,
+            args.yolo,
+            args.flags,
+            args.max_iterations,
+            args.completion_promise,
+            args.ralph_fresh,
+        )
+        return
+    if args.command == "science":
+        if args.max_iterations < 0:
+            raise SystemExit("--max-iterations must be >= 0.")
+        science_prompt = _science_prompt(prompt)
+        run_ralph_loop(
+            science_prompt,
             args.cwd,
             args.yolo,
             args.flags,
