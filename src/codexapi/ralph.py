@@ -19,7 +19,7 @@ def run_ralph_loop(
     flags=None,
     max_iterations=0,
     completion_promise=None,
-    fresh=False,
+    fresh=True,
 ):
     """Run a Ralph Wiggum-style loop that repeats the same prompt.
 
@@ -37,8 +37,8 @@ def run_ralph_loop(
     may ONLY output it when the statement is completely and unequivocally TRUE.
     Do not output false promises to escape the loop.
 
-    By default a single Agent instance is reused for shared context. Set
-    `fresh=True` to create a new Agent each iteration for a clean context.
+    By default each iteration uses a fresh Agent for a clean context. Set
+    `fresh=False` to reuse a single Agent instance for shared context.
     Cancel by deleting the state file or running `codexapi ralph --cancel`.
     """
     if not isinstance(prompt, str) or not prompt.strip():

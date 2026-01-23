@@ -920,8 +920,8 @@ def main(argv=None):
         "  --completion-promise after trimming/collapsing whitespace. CRITICAL RULE:\n"
         "  Only output the promise when it is completely and unequivocally TRUE.\n"
         "  Cancel by deleting .codexapi/ralph-loop.local.md or running codexapi ralph --cancel.\n"
-        "  Default reuses a single Codex thread; use --ralph-fresh for a new Agent\n"
-        "  each iteration (no shared context).\n"
+        "  Default starts each iteration with a fresh Agent context; use --ralph-reuse\n"
+        "  to reuse a single Codex thread across iterations.\n"
     )
     parser = argparse.ArgumentParser(
         prog="codexapi",
@@ -1026,10 +1026,20 @@ def main(argv=None):
         "--completion-promise",
         help="Promise text to match in <promise>...</promise>.",
     )
-    ralph_parser.add_argument(
+    ralph_fresh_group = ralph_parser.add_mutually_exclusive_group()
+    ralph_fresh_group.add_argument(
         "--ralph-fresh",
         action="store_true",
-        help="Start each iteration with a fresh Agent context.",
+        dest="ralph_fresh",
+        default=None,
+        help="Start each iteration with a fresh Agent context (default).",
+    )
+    ralph_fresh_group.add_argument(
+        "--ralph-reuse",
+        action="store_false",
+        dest="ralph_fresh",
+        default=None,
+        help="Reuse the same Agent context each iteration.",
     )
     ralph_parser.add_argument("--cwd", help="Working directory for the Codex session.")
     ralph_parser.add_argument(
@@ -1104,12 +1114,16 @@ def main(argv=None):
         if args.cancel:
             if args.prompt:
                 raise SystemExit("ralph --cancel takes no prompt.")
-            if args.completion_promise or args.ralph_fresh:
-                raise SystemExit("--completion-promise/--ralph-fresh are not allowed with --cancel.")
+            if args.completion_promise or args.ralph_fresh is not None:
+                raise SystemExit(
+                    "--completion-promise/--ralph-fresh/--ralph-reuse are not allowed with --cancel."
+                )
             if args.max_iterations != 0:
                 raise SystemExit("--max-iterations is not allowed with --cancel.")
             print(cancel_ralph_loop(args.cwd))
             return
+        if args.ralph_fresh is None:
+            args.ralph_fresh = True
 
     if args.command == "task" and args.task_file:
         if args.prompt:
