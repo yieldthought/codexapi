@@ -2,8 +2,7 @@
 
 import yaml
 
-from .agent import agent
-from .task import Task
+from .task import AutoTask
 
 _ITEM_TOKEN = "{{item}}"
 
@@ -21,6 +20,13 @@ def load_task_file(path):
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Task file missing non-empty 'prompt'.")
 
+    max_iterations = data.get("max_iterations")
+    if max_iterations is not None:
+        if not isinstance(max_iterations, int):
+            raise ValueError("Task file max_iterations must be an integer.")
+        if max_iterations < 0:
+            raise ValueError("Task file max_iterations must be >= 0.")
+
     return {
         "prompt": prompt,
         "set_up": _optional_str(data.get("set_up")),
@@ -28,6 +34,7 @@ def load_task_file(path):
         "check": _optional_str(data.get("check")),
         "on_success": _optional_str(data.get("on_success")),
         "on_failure": _optional_str(data.get("on_failure")),
+        "max_iterations": max_iterations,
     }
 
 
@@ -47,62 +54,59 @@ def _render(text, item):
     return text.replace(_ITEM_TOKEN, item)
 
 
-class AutoTask(Task):
-    """Task subclass that maps YAML strings onto Task hooks."""
+class TaskFile(AutoTask):
+    """Task subclass that maps a YAML task file onto Task hooks."""
 
     def __init__(
         self,
-        config,
+        path,
         item=None,
-        max_attempts=10,
+        max_iterations=None,
         cwd=None,
         yolo=True,
         thread_id=None,
         flags=None,
     ):
-        if not isinstance(config, dict):
-            raise TypeError("config must be a task definition dict")
-        self._config = config
-        self._item = "" if item is None else str(item)
-        self._yolo = yolo
-        self._flags = flags
-        prompt = _render(config.get("prompt"), self._item)
-        super().__init__(prompt, max_attempts, cwd, yolo, thread_id, flags)
-
-    def _hook(self, name):
-        return _render(self._config.get(name), self._item)
-
-    def set_up(self):
-        text = self._hook("set_up")
-        if text:
-            agent(text, self.cwd, self._yolo, self._flags)
-
-    def tear_down(self):
-        text = self._hook("tear_down")
-        if text:
-            agent(text, self.cwd, self._yolo, self._flags)
-
-    def check(self, output=None):
-        text = self._hook("check")
-        if not text:
-            return None
-        last_output = output if output is not None else self.last_output
-        last_output = last_output or ""
-        if last_output:
-            prompt = f"{text}\n\nAGENT OUTPUT:\n{last_output}"
-        else:
-            prompt = text
-        result = agent(prompt, self.cwd, self._yolo, self._flags)
-        if not isinstance(result, str) or not result.strip():
-            return None
-        return result
-
-    def on_success(self, result):
-        text = self._hook("on_success")
-        if text:
-            agent(text, self.cwd, self._yolo, self._flags)
-
-    def on_failure(self, result):
-        text = self._hook("on_failure")
-        if text:
-            agent(text, self.cwd, self._yolo, self._flags)
+        task_def = load_task_file(path)
+        if max_iterations is None:
+            max_iterations = task_def.get("max_iterations")
+        elif not isinstance(max_iterations, int):
+            raise ValueError("max_iterations must be an integer.")
+        elif max_iterations < 0:
+            raise ValueError("max_iterations must be >= 0.")
+        item_text = "" if item is None else str(item)
+        rendered = {
+            "prompt": _render(task_def.get("prompt"), item_text),
+            "set_up": _render(task_def.get("set_up"), item_text),
+            "tear_down": _render(task_def.get("tear_down"), item_text),
+            "check": _render(task_def.get("check"), item_text),
+            "on_success": _render(task_def.get("on_success"), item_text),
+            "on_failure": _render(task_def.get("on_failure"), item_text),
+        }
+        if max_iterations is None:
+            super().__init__(
+                rendered["prompt"],
+                rendered["check"],
+                cwd=cwd,
+                yolo=yolo,
+                thread_id=thread_id,
+                flags=flags,
+                set_up=rendered["set_up"],
+                tear_down=rendered["tear_down"],
+                on_success=rendered["on_success"],
+                on_failure=rendered["on_failure"],
+            )
+            return
+        super().__init__(
+            rendered["prompt"],
+            rendered["check"],
+            max_iterations,
+            cwd,
+            yolo,
+            thread_id,
+            flags,
+            set_up=rendered["set_up"],
+            tear_down=rendered["tear_down"],
+            on_success=rendered["on_success"],
+            on_failure=rendered["on_failure"],
+        )

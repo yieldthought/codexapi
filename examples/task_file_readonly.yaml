@@ -6,6 +6,5 @@ set_up: |
   Do not modify anything.
 check: |
   Confirm the summary has exactly three bullets and mentions CodexAPI.
-  Return an empty string if OK, otherwise explain what is missing.
 on_success: "Acknowledge completion in one short sentence."
 tear_down: "No cleanup needed."

@@ -60,6 +60,11 @@ echo "Say hello." | codexapi run
 codexapi task "Fix the failing tests." --max-iterations 5
 codexapi task -f task.yaml
 ```
+Progress is shown by default for `codexapi task`; use `--quiet` to suppress it.
+
+Task files default to using the standard check prompt for the task. Set `check: "None"` to skip verification.
+Use `max_iterations` in the task file to override the default attempt cap (0 means unlimited).
+Checks are wrapped with the verifier prompt, include the agent output, and expect JSON with `success`/`reason`.
 
 Show running sessions and their latest activity:
 
@@ -125,26 +130,31 @@ the same conversation and returns only the agent's message.
 - `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
 
-### `task(prompt, check=None, n=10, cwd=None, yolo=True, flags=None) -> str`
+### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 
 Runs a task with checker-driven retries and returns the success summary.
 Raises `TaskFailed` when the maximum attempts are reached.
 
-- `check` (str | None | False): custom check prompt, default checker, or `False` to skip.
-- `n` (int): maximum number of retries after a failed check.
+- `check` (str | None | False): custom check prompt, default checker, or `False`/`"None"` to skip.
+- `max_iterations` (int): maximum number of task attempts (0 means unlimited).
+- `progress` (bool): print progress after each verification round.
+- `set_up`/`tear_down`/`on_success`/`on_failure` (str | None): optional hook prompts.
 
-### `task_result(prompt, check=None, n=10, cwd=None, yolo=True, flags=None) -> TaskResult`
+### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> TaskResult`
 
 Runs a task with checker-driven retries and returns a `TaskResult` without
 raising `TaskFailed`.
+Arguments mirror `task()` (including hooks).
 
 ### `Task(prompt, max_attempts=10, cwd=None, yolo=True, thread_id=None, flags=None)`
 
 Runs a Codex task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
 `None`/`""` when the task passes.
+If you do not override `check()`, the default verifier wrapper runs with the
+default check prompt and includes the agent output.
 
-- `__call__() -> TaskResult`: run the task.
+- `__call__(debug=False, progress=False) -> TaskResult`: run the task.
 - `set_up()`: optional setup hook.
 - `tear_down()`: optional cleanup hook.
 - `check(output=None) -> str | None`: return an error description or `None`/`""`. `output` is the last agent response.
@@ -163,7 +173,7 @@ Simple result object returned by `Task.__call__`.
 
 ### `TaskFailed`
 
-Exception raised by `task()` when retries are exhausted.
+Exception raised by `task()` when attempts are exhausted.
 
 - `summary` (str): failure summary text.
 - `attempts` (int | None): attempts made when the task failed.

@@ -14,8 +14,8 @@ from pathlib import Path
 from .agent import Agent, agent
 from .foreach import foreach
 from .ralph import cancel_ralph_loop, run_ralph_loop
-from .task import TaskFailed, task
-from .taskfile import AutoTask, load_task_file
+from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
+from .taskfile import TaskFile
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -1008,7 +1008,10 @@ def main(argv=None):
         "--max-iterations",
         type=int,
         default=None,
-        help="Max verification retries after a failed check (0 means no retries). Defaults to 10.",
+        help=(
+            "Max agent attempts (0 means unlimited). "
+            f"Defaults to {DEFAULT_MAX_ITERATIONS}."
+        ),
     )
     task_parser.add_argument("--cwd", help="Working directory for the Codex session.")
     task_parser.add_argument(
@@ -1022,9 +1025,9 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
     task_parser.add_argument(
-        "--progress",
+        "--quiet",
         action="store_true",
-        help="Print progress after each verification round.",
+        help="Suppress progress output during verification.",
     )
 
     ralph_parser = subparsers.add_parser(
@@ -1226,17 +1229,15 @@ def main(argv=None):
             raise SystemExit("--check is not allowed with -f.")
         if args.max_iterations is not None:
             raise SystemExit("--max-iterations is not allowed with -f.")
-        task_def = load_task_file(args.task_file)
-        task_runner = AutoTask(
-            task_def,
+        task_runner = TaskFile(
+            args.task_file,
             None,
-            10,
-            args.cwd,
-            args.yolo,
-            None,
-            args.flags,
+            cwd=args.cwd,
+            yolo=args.yolo,
+            thread_id=None,
+            flags=args.flags,
         )
-        result = task_runner()
+        result = task_runner(progress=not args.quiet)
         print(result.summary)
         if not result.success:
             raise SystemExit(1)
@@ -1279,10 +1280,10 @@ def main(argv=None):
         return
     if args.command == "task":
         if args.max_iterations is None:
-            args.max_iterations = 10
+            args.max_iterations = DEFAULT_MAX_ITERATIONS
         if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
-        check = args.check if args.check is not None else prompt
+        check = args.check
         try:
             message = task(
                 prompt,
@@ -1291,7 +1292,7 @@ def main(argv=None):
                 args.cwd,
                 args.yolo,
                 args.flags,
-                args.progress,
+                not args.quiet,
             )
         except TaskFailed as exc:
             message = exc.summary

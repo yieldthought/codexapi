@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
-from .taskfile import AutoTask, load_task_file
+from .taskfile import TaskFile
 
 _STATUS_RUNNING = "⏳"
 _STATUS_SUCCESS = "✅"
@@ -43,7 +43,6 @@ def foreach(
     flags=None,
 ):
     """Run a task file over each item in list_file and update the file."""
-    task_def = load_task_file(task_file)
     lines, ends_with_newline = _read_lines(list_file)
     items, skipped = _collect_items(lines)
 
@@ -69,7 +68,7 @@ def foreach(
                         _run_item,
                         index,
                         item,
-                        task_def,
+                        task_file,
                         lines,
                         ends_with_newline,
                         list_file,
@@ -165,7 +164,7 @@ def _format_turns(used, total):
 def _run_item(
     index,
     item,
-    task_def,
+    task_file,
     lines,
     ends_with_newline,
     list_file,
@@ -189,14 +188,13 @@ def _run_item(
     attempts = None
     max_attempts = None
     try:
-        task = AutoTask(
-            task_def,
+        task = TaskFile(
+            task_file,
             item,
-            10,
-            cwd,
-            yolo,
-            None,
-            flags,
+            cwd=cwd,
+            yolo=yolo,
+            thread_id=None,
+            flags=flags,
         )
         max_attempts = task.max_attempts
         result = task()

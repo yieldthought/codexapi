@@ -3,7 +3,6 @@ prompt: |
   Do not edit any files or run commands that change the working tree.
 check: |
   Verify the summary mentions {{item}} and is exactly two sentences.
-  Return an empty string if OK, otherwise explain what is missing.
 on_success: "Acknowledge completion for {{item}}."
 on_failure: |
   Explain why the check failed for {{item}}.
