@@ -59,8 +59,10 @@ echo "Say hello." | codexapi run
 ```bash
 codexapi task "Fix the failing tests." --max-iterations 5
 codexapi task -f task.yaml
+codexapi task -f task.yaml -i README.md
 ```
 Progress is shown by default for `codexapi task`; use `--quiet` to suppress it.
+When using `--item`, the task file must include at least one `{{item}}` placeholder.
 
 Task files default to using the standard check prompt for the task. Set `check: "None"` to skip verification.
 Use `max_iterations` in the task file to override the default attempt cap (0 means unlimited).
@@ -106,6 +108,8 @@ Run a task file across a list file:
 ```bash
 codexapi foreach list.txt task.yaml
 codexapi foreach list.txt task.yaml -n 4
+codexapi foreach list.txt task.yaml --retry-failed
+codexapi foreach list.txt task.yaml --retry-all
 ```
 
 ## API

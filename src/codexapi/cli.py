@@ -15,7 +15,7 @@ from .agent import Agent, agent
 from .foreach import foreach
 from .ralph import cancel_ralph_loop, run_ralph_loop
 from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
-from .taskfile import TaskFile
+from .taskfile import TaskFile, load_task_file, task_def_uses_item
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -62,6 +62,7 @@ _COLUMN_TITLES = {
     "perm": "PERM",
     "cwd": "CWD",
 }
+_FOREACH_STATUS_MARKERS = {"⏳", "✅", "❌"}
 
 
 def _read_prompt(prompt):
@@ -871,6 +872,37 @@ def _print_top_once(show):
         print(_format_session(session, layout))
 
 
+def _clean_foreach_list(path, retry_failed, retry_all):
+    with open(path, "r", encoding="utf-8") as handle:
+        data = handle.read()
+    ends_with_newline = data.endswith("\n")
+    lines = data.splitlines()
+
+    cleaned = []
+    changed = False
+    for line in lines:
+        new_line = line
+        if retry_all or (retry_failed and new_line.startswith("❌")):
+            if new_line and new_line[0] in _FOREACH_STATUS_MARKERS:
+                new_line = new_line[1:]
+                if new_line.startswith(" "):
+                    new_line = new_line[1:]
+            pipe = new_line.find("|")
+            if pipe != -1:
+                new_line = new_line[:pipe].rstrip()
+        if new_line != line:
+            changed = True
+        cleaned.append(new_line)
+
+    if not changed:
+        return
+    text = "\n".join(cleaned)
+    if ends_with_newline:
+        text += "\n"
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
 def _run_top(argv):
     if argv and argv[0] in ("-h", "--help"):
         print("usage: codexapi top")
@@ -994,6 +1026,11 @@ def main(argv=None):
         "-f",
         "--task-file",
         help="YAML task file to run.",
+    )
+    task_parser.add_argument(
+        "-i",
+        "--item",
+        help="Item value for task files that use {{item}} placeholders.",
     )
     task_parser.add_argument(
         "prompt",
@@ -1148,6 +1185,17 @@ def main(argv=None):
         "task_file",
         help="Path to the YAML task file.",
     )
+    foreach_retry_group = foreach_parser.add_mutually_exclusive_group()
+    foreach_retry_group.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Reset failed (❌) items for re-run.",
+    )
+    foreach_retry_group.add_argument(
+        "--retry-all",
+        action="store_true",
+        help="Reset all items for re-run.",
+    )
     foreach_parser.add_argument(
         "-n",
         type=int,
@@ -1181,6 +1229,12 @@ def main(argv=None):
     if args.command == "foreach":
         if args.n is not None and args.n < 1:
             raise SystemExit("-n must be >= 1.")
+        if args.retry_failed or args.retry_all:
+            _clean_foreach_list(
+                args.list_file,
+                args.retry_failed,
+                args.retry_all,
+            )
         result = foreach(
             args.list_file,
             args.task_file,
@@ -1225,13 +1279,19 @@ def main(argv=None):
     if args.command == "task" and args.task_file:
         if args.prompt:
             raise SystemExit("task -f does not take a prompt.")
+        if args.item is not None:
+            task_def = load_task_file(args.task_file)
+            if not task_def_uses_item(task_def):
+                raise SystemExit(
+                    "task -f --item requires {{item}} in the task file."
+                )
         if args.check is not None:
             raise SystemExit("--check is not allowed with -f.")
         if args.max_iterations is not None:
             raise SystemExit("--max-iterations is not allowed with -f.")
         task_runner = TaskFile(
             args.task_file,
-            None,
+            args.item,
             cwd=args.cwd,
             yolo=args.yolo,
             thread_id=None,
@@ -1279,6 +1339,8 @@ def main(argv=None):
         )
         return
     if args.command == "task":
+        if args.item is not None:
+            raise SystemExit("--item is only supported with -f.")
         if args.max_iterations is None:
             args.max_iterations = DEFAULT_MAX_ITERATIONS
         if args.max_iterations < 0:

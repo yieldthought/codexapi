@@ -54,6 +54,17 @@ def _render(text, item):
     return text.replace(_ITEM_TOKEN, item)
 
 
+def task_def_uses_item(task_def):
+    """Return True if a task definition includes the {{item}} placeholder."""
+    if not isinstance(task_def, dict):
+        raise TypeError("task definition must be a dict")
+    for key in ("prompt", "set_up", "tear_down", "check", "on_success", "on_failure"):
+        value = task_def.get(key)
+        if isinstance(value, str) and _ITEM_TOKEN in value:
+            return True
+    return False
+
+
 class TaskFile(AutoTask):
     """Task subclass that maps a YAML task file onto Task hooks."""
 

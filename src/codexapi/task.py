@@ -134,7 +134,17 @@ def _format_duration(seconds):
     return " ".join(parts)
 
 
-def _print_progress(
+def _progress_round_label(attempt, total):
+    if not total:
+        return f"Round {attempt}/unlimited"
+    return f"Round {attempt}/{total}"
+
+
+def _print_progress_start(attempt, total):
+    print(_progress_round_label(attempt, total), flush=True)
+
+
+def _print_progress_result(
     attempt,
     total,
     start_time,
@@ -143,13 +153,13 @@ def _print_progress(
     cwd,
     yolo,
     flags,
+    success,
 ):
     elapsed = time.monotonic() - start_time
     remaining = 0
     remaining_text = "unknown"
-    if total:
-        if attempt:
-            remaining = (elapsed / attempt) * (total - attempt)
+    if total and attempt:
+        remaining = (elapsed / attempt) * (total - attempt)
         remaining_text = _format_duration(remaining)
 
     summary_prompt = _build_progress_prompt(agent_output, check_output)
@@ -157,16 +167,13 @@ def _print_progress(
     agent_summary, check_summary = _progress_result(summary)
 
     elapsed_text = _format_duration(elapsed)
-    if not total:
-        round_text = f"Round {attempt}/unlimited"
-    else:
-        round_text = f"Round {attempt}/{total}"
-    print(
-        f"{round_text} ({elapsed_text} elapsed, {remaining_text} remaining)",
-        flush=True,
-    )
     print(f"Agent: {agent_summary}", flush=True)
     print(f"Check: {check_summary}", flush=True)
+    verdict = "success" if success else "failure"
+    print(
+        f"Verdict: {verdict} ({elapsed_text} elapsed, {remaining_text} remaining)",
+        flush=True,
+    )
     print("", flush=True)
 
 def _fix_prompt(error):
@@ -443,6 +450,11 @@ class Task:
             attempt = 0
             while True:
                 attempt += 1
+                if progress:
+                    _print_progress_start(
+                        attempt,
+                        self.max_attempts,
+                    )
                 error = self.check(self.last_output)
                 if debug:
                     _logger.debug("Check error: %s", error)
@@ -451,7 +463,7 @@ class Task:
                     check_output = self.last_check_output
                     if self.check_skipped:
                         check_output = "Verification skipped."
-                    _print_progress(
+                    _print_progress_result(
                         attempt,
                         self.max_attempts,
                         start_time,
@@ -460,6 +472,7 @@ class Task:
                         self.cwd,
                         self._yolo,
                         self._flags,
+                        not error,
                     )
                 if not error:
                     summary = self.agent(self.success_prompt())
