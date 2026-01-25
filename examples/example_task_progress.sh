@@ -1,0 +1,1 @@
+codexapi task "The goal is to increase /tmp/work_done.txt towards 5 by incrementing it once and then return control to the user/verifier agent for their feedback before doing so again. Step by step is the way. Initialize at 0 if it does not exist. Verifier: report success when the value has reached the target."

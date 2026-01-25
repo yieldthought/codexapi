@@ -1298,7 +1298,6 @@ def main(argv=None):
             flags=args.flags,
         )
         result = task_runner(progress=not args.quiet)
-        print(result.summary)
         if not result.success:
             raise SystemExit(1)
         return
@@ -1310,6 +1309,7 @@ def main(argv=None):
         prompt_source = args.task
     prompt = _read_prompt(prompt_source)
     exit_code = 0
+    message = None
 
     if args.command == "ralph":
         if args.max_iterations < 0:
@@ -1347,7 +1347,7 @@ def main(argv=None):
             raise SystemExit("--max-iterations must be >= 0.")
         check = args.check
         try:
-            message = task(
+            task(
                 prompt,
                 check,
                 args.max_iterations,
@@ -1357,7 +1357,6 @@ def main(argv=None):
                 not args.quiet,
             )
         except TaskFailed as exc:
-            message = exc.summary
             exit_code = 1
     else:
         use_session = args.thread_id or args.print_thread_id
@@ -1374,7 +1373,8 @@ def main(argv=None):
         else:
             message = agent(prompt, args.cwd, args.yolo, args.flags)
 
-    print(message)
+    if message is not None:
+        print(message)
     if exit_code:
         raise SystemExit(exit_code)
 

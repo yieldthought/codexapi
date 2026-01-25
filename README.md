@@ -54,7 +54,7 @@ codexapi run --cwd /path/to/project "Fix the failing tests."
 echo "Say hello." | codexapi run
 ```
 
-`codexapi task` exits with code 0 on success and 1 on failure, printing the summary.
+`codexapi task` exits with code 0 on success and 1 on failure.
 
 ```bash
 codexapi task "Fix the failing tests." --max-iterations 5
@@ -67,6 +67,12 @@ When using `--item`, the task file must include at least one `{{item}}` placehol
 Task files default to using the standard check prompt for the task. Set `check: "None"` to skip verification.
 Use `max_iterations` in the task file to override the default attempt cap (0 means unlimited).
 Checks are wrapped with the verifier prompt, include the agent output, and expect JSON with `success`/`reason`.
+
+Example task progress run:
+
+```bash
+./examples/example_task_progress.sh
+```
 
 Show running sessions and their latest activity:
 
@@ -141,7 +147,7 @@ Raises `TaskFailed` when the maximum attempts are reached.
 
 - `check` (str | None | False): custom check prompt, default checker, or `False`/`"None"` to skip.
 - `max_iterations` (int): maximum number of task attempts (0 means unlimited).
-- `progress` (bool): print progress after each verification round.
+- `progress` (bool): show a tqdm progress bar with a one-line status after each round.
 - `set_up`/`tear_down`/`on_success`/`on_failure` (str | None): optional hook prompts.
 
 ### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> TaskResult`

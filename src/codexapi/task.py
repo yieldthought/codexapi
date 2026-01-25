@@ -5,6 +5,7 @@ import logging
 import time
 
 from .agent import Agent, agent
+from tqdm import tqdm
 
 _logger = logging.getLogger(__name__)
 
@@ -20,11 +21,13 @@ _CHECK_PREFIX = (
     "Set success to true only if everything matches the intent."
 )
 _CHECK_SUFFIX = "JSON only. No markdown or extra text."
-_PROGRESS_PROMPT = (
-    "Summarize the outputs below in one line each.\n"
-    "Return only JSON with keys: agent (string) and check (string).\n"
-    "Each value must be a single line with no newlines.\n"
-    "Do not run commands or change any files."
+_ESTIMATE_PROMPT = (
+    "Estimate remaining work in story points for the task below.\n"
+    "You may inspect the repo (read files, git status/diff), but do not run tests.\n"
+    "Do not change any files.\n"
+    "Use the task prompt, current repo state, and latest agent/check outputs.\n"
+    "Return only JSON with keys: remaining (number) and summary (string).\n"
+    "summary must be a single line describing agent + verifier status."
 )
 DEFAULT_MAX_ITERATIONS = 10
 
@@ -62,14 +65,32 @@ def _resolve_check_text(prompt, check):
     return check, False
 
 
-def _build_progress_prompt(agent_output, check_output):
-    return (
-        f"{_PROGRESS_PROMPT}\n\n"
-        "AGENT OUTPUT:\n"
-        f"{agent_output}\n\n"
-        "CHECK OUTPUT:\n"
-        f"{check_output}"
+def _build_estimate_prompt(prompt, agent_output, check_output, previous_total):
+    agent_text = agent_output.strip() or "(no agent output yet)"
+    check_text = check_output.strip() or "(no check output yet)"
+    lines = [
+        _ESTIMATE_PROMPT,
+        "",
+        "TASK:",
+        "```",
+        prompt,
+        "```",
+    ]
+    if previous_total is not None:
+        lines.append(
+            f"This task was previously estimated at about {previous_total} story points."
+        )
+    lines.extend(
+        [
+            "",
+            "AGENT OUTPUT:",
+            agent_text,
+            "",
+            "CHECK OUTPUT:",
+            check_text,
+        ]
     )
+    return "\n".join(lines)
 
 
 def _check_result(output):
@@ -91,25 +112,29 @@ def _check_result(output):
     return success, reason.strip()
 
 
-def _progress_result(output):
+def _estimate_result(output):
     try:
         data = json.loads(output)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"Progress summary returned invalid JSON: {exc}"
+            f"Estimate returned invalid JSON: {exc}"
         ) from exc
 
     if not isinstance(data, dict):
-        raise RuntimeError("Progress summary JSON must be an object.")
+        raise RuntimeError("Estimate JSON must be an object.")
 
-    agent_summary = data.get("agent")
-    check_summary = data.get("check")
-    if not isinstance(agent_summary, str):
-        raise RuntimeError("Progress summary JSON missing string 'agent'.")
-    if not isinstance(check_summary, str):
-        raise RuntimeError("Progress summary JSON missing string 'check'.")
+    remaining = data.get("remaining")
+    summary = data.get("summary")
+    if not isinstance(remaining, (int, float)):
+        raise RuntimeError("Estimate JSON missing numeric 'remaining'.")
+    if not isinstance(summary, str):
+        raise RuntimeError("Estimate JSON missing string 'summary'.")
 
-    return _single_line(agent_summary), _single_line(check_summary)
+    remaining = int(round(remaining))
+    if remaining < 0:
+        remaining = 0
+
+    return remaining, _single_line(summary)
 
 
 def _single_line(text):
@@ -118,63 +143,36 @@ def _single_line(text):
     return " ".join(text.replace("\r", " ").split())
 
 
-def _format_duration(seconds):
+def _format_elapsed(seconds):
     if seconds < 0:
         seconds = 0
     seconds = int(round(seconds))
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-    parts = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes or hours:
-        parts.append(f"{minutes}m")
-    if not hours:
-        parts.append(f"{seconds}s")
-    return " ".join(parts)
+    return f"{hours}h{minutes:02d}m{seconds:02d}s"
 
 
-def _progress_round_label(attempt, total):
-    if not total:
-        return f"Round {attempt}/unlimited"
-    return f"Round {attempt}/{total}"
+def _format_turns(attempt, total):
+    if total:
+        width = max(2, len(str(total)))
+        total_text = str(total)
+    else:
+        width = 2
+        total_text = "∞"
+    attempt_text = f"{attempt:0{width}d}"
+    return f"{attempt_text}/{total_text}"
 
 
-def _print_progress_start(attempt, total):
-    print(_progress_round_label(attempt, total), flush=True)
-
-
-def _print_progress_result(
-    attempt,
-    total,
-    start_time,
-    agent_output,
-    check_output,
-    cwd,
-    yolo,
-    flags,
-    success,
-):
-    elapsed = time.monotonic() - start_time
-    remaining = 0
-    remaining_text = "unknown"
-    if total and attempt:
-        remaining = (elapsed / attempt) * (total - attempt)
-        remaining_text = _format_duration(remaining)
-
-    summary_prompt = _build_progress_prompt(agent_output, check_output)
-    summary = agent(summary_prompt, cwd, yolo, flags)
-    agent_summary, check_summary = _progress_result(summary)
-
-    elapsed_text = _format_duration(elapsed)
-    print(f"Agent: {agent_summary}", flush=True)
-    print(f"Check: {check_summary}", flush=True)
-    verdict = "success" if success else "failure"
-    print(
-        f"Verdict: {verdict} ({elapsed_text} elapsed, {remaining_text} remaining)",
-        flush=True,
+def estimate(prompt, agent_output, check_output, cwd, yolo, flags, previous_total):
+    estimate_prompt = _build_estimate_prompt(
+        prompt,
+        agent_output or "",
+        check_output or "",
+        previous_total,
     )
-    print("", flush=True)
+    output = agent(estimate_prompt, cwd, yolo, flags)
+    return _estimate_result(output)
+
 
 def _fix_prompt(error):
     return (
@@ -241,7 +239,7 @@ def task(
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
         flags: Additional raw CLI flags to pass to Codex.
-        progress: Whether to print progress after each verification round.
+        progress: Whether to show a tqdm progress bar with status updates.
         set_up: Optional setup prompt to run before the task.
         tear_down: Optional cleanup prompt to run after the task.
         on_success: Optional prompt to run after a successful task.
@@ -287,7 +285,7 @@ def task_result(
     """Run a prompt with optional checker-driven retries and return TaskResult.
 
     The runner keeps a single session. Each verification attempt uses a fresh,
-    stateless agent call. When progress is True, print a summary each round.
+    stateless agent call. When progress is True, show progress updates each round.
 
     Hook strings mirror task file keys: set_up, tear_down, on_success, on_failure.
     """
@@ -369,6 +367,9 @@ class Task:
         self.check_text = None
         self._yolo = yolo
         self._flags = flags
+        self._progress_enabled = False
+        self._progress_bar = None
+        self._progress_total = None
         self.agent = Agent(
             cwd,
             yolo,
@@ -410,6 +411,30 @@ class Task:
     def on_failure(self, result):
         """Hook called after a failed run, e.g. log the failure reason."""
 
+    def on_progress(
+        self,
+        turns,
+        max_turns,
+        total_estimate,
+        remaining_estimate,
+        status_line,
+    ):
+        """Hook called with progress updates."""
+        if not self._progress_enabled:
+            return
+        if self._progress_bar is None:
+            self._progress_bar = tqdm(total=total_estimate)
+        if total_estimate != self._progress_bar.total:
+            self._progress_bar.total = total_estimate
+        current = total_estimate - remaining_estimate
+        if current < 0:
+            current = 0
+        if self._progress_bar.n != current:
+            self._progress_bar.n = current
+        self._progress_bar.refresh()
+        if status_line:
+            tqdm.write(status_line, file=self._progress_bar.fp)
+
     def fix_prompt(self, error):
         """Build a prompt that asks the agent to fix checker failures."""
         return (
@@ -432,11 +457,34 @@ class Task:
     def __call__(self, debug=False, progress=False):
         """Run the task with checker-driven retries.
             If debug is True, log debug messages.
-            If progress is True, print progress after each verification round.
+            If progress is True, show a tqdm progress bar with status updates.
         """
         try:
             # If this fails in the middle we will still try to tear down
             self.set_up()
+
+            self._progress_enabled = progress
+            if progress:
+                remaining, _summary = estimate(
+                    self.prompt,
+                    "",
+                    "",
+                    self.cwd,
+                    self._yolo,
+                    self._flags,
+                    None,
+                )
+                self._progress_total = remaining
+                start_time = time.monotonic()
+                self.on_progress(
+                    0,
+                    self.max_attempts,
+                    self._progress_total,
+                    remaining,
+                    None,
+                )
+            else:
+                start_time = time.monotonic()
 
             # Start with the initial prompt
             output = self.agent(self.prompt)
@@ -445,16 +493,10 @@ class Task:
                 _logger.debug("Initial output: %s", output)
 
             # Try correcting it up to max_attempts times
-            start_time = time.monotonic()
             error = None
             attempt = 0
             while True:
                 attempt += 1
-                if progress:
-                    _print_progress_start(
-                        attempt,
-                        self.max_attempts,
-                    )
                 error = self.check(self.last_output)
                 if debug:
                     _logger.debug("Check error: %s", error)
@@ -463,16 +505,36 @@ class Task:
                     check_output = self.last_check_output
                     if self.check_skipped:
                         check_output = "Verification skipped."
-                    _print_progress_result(
-                        attempt,
-                        self.max_attempts,
-                        start_time,
-                        self.last_output,
+                    remaining, summary = estimate(
+                        self.prompt,
+                        self.last_output or "",
                         check_output or "",
                         self.cwd,
                         self._yolo,
                         self._flags,
-                        not error,
+                        self._progress_total,
+                    )
+                    total_estimate = self._progress_total
+                    if total_estimate is None or remaining > total_estimate:
+                        total_estimate = remaining
+                    self._progress_total = total_estimate
+                    elapsed = _format_elapsed(time.monotonic() - start_time)
+                    status_prefix = (
+                        f"[{_format_turns(attempt, self.max_attempts)} @ {elapsed}]"
+                    )
+                    is_final = not error or (
+                        self.max_attempts and attempt >= self.max_attempts
+                    )
+                    if is_final:
+                        marker = "✅" if not error else "❌"
+                        summary = f"{marker} {summary}".strip()
+                    status_line = f"{status_prefix}: {summary}".rstrip()
+                    self.on_progress(
+                        attempt,
+                        self.max_attempts,
+                        total_estimate,
+                        remaining,
+                        status_line,
                     )
                 if not error:
                     summary = self.agent(self.success_prompt())
@@ -507,6 +569,8 @@ class Task:
         finally:
             # No matter what, once we have set_up we will always tear_down
             self.tear_down()
+            if self._progress_bar is not None:
+                self._progress_bar.close()
 
 
 class AutoTask(Task):
