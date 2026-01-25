@@ -61,6 +61,12 @@ codexapi task "Fix the failing tests." --max-iterations 5
 codexapi task -f task.yaml
 codexapi task -f task.yaml -i README.md
 ```
+Create a new task file template:
+
+```bash
+codexapi create task.yaml
+codexapi create my_task   # adds .yaml
+```
 Progress is shown by default for `codexapi task`; use `--quiet` to suppress it.
 When using `--item`, the task file must include at least one `{{item}}` placeholder.
 

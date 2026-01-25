@@ -40,6 +40,34 @@ _SCIENCE_TEMPLATE = (
     "your own best judgement towards our goal! Remember to update SCIENCE.md. "
     "Good hunting!"
 )
+_TASK_TEMPLATE = (
+    "prompt: |\n"
+    "  Main task prompt. Required. Use {{item}} for per-item values.\n"
+    "  Describe what Codex should do here.\n"
+    "\n"
+    "set_up: |\n"
+    "  Optional setup steps before the task runs.\n"
+    "  Example: create a branch for {{item}} and switch to it.\n"
+    "\n"
+    "check: |\n"
+    "  Optional verification prompt. Use \"None\" to skip verification.\n"
+    "  If this section is not present, an automatic one based on the prompt will be used.\n"
+    "  Example: run pytest and check all tests pass with no skips or cheats, check README.md updated.\n"
+    "\n"
+    "on_success: |\n"
+    "  Optional follow-up instructions after a successful task.\n"
+    "  Example: add and commit changes and use 'gh' to open a PR.\n"
+    "\n"
+    "on_failure: |\n"
+    "  Optional follow-up instructions after a failed task.\n"
+    f"  Example: revert changes and abandon the new branch.\n"
+    "\n"
+    "tear_down: |\n"
+    "  Optional cleanup steps after the task finishes.\n"
+    "  Example: remove any temporary or untracked files and change back to the main branch.\n"
+    "\n"
+    "max_iterations: 10  # Optional (default is 10). 0 means unlimited.\n"
+)
 _TOOL_LABELS = {
     "apply_patch": "Editing files",
     "exec_command": "Running command",
@@ -85,6 +113,24 @@ def _science_prompt(task):
     if not isinstance(task, str) or not task.strip():
         raise SystemExit("Science task must be a non-empty string.")
     return _SCIENCE_TEMPLATE.replace("{task}", task.strip())
+
+
+def _create_task_template(path):
+    if not isinstance(path, str) or not path.strip():
+        raise SystemExit("create requires a filename.")
+    target = Path(path)
+    if target.suffix not in (".yaml", ".yml"):
+        target = Path(f"{target}.yaml")
+    if target.exists():
+        if target.is_dir():
+            raise SystemExit(f"{target} is a directory.")
+        raise SystemExit(f"{target} already exists.")
+    try:
+        with open(target, "x", encoding="utf-8") as handle:
+            handle.write(_TASK_TEMPLATE)
+    except FileNotFoundError:
+        raise SystemExit(f"Directory does not exist: {target.parent}") from None
+    print(target)
 
 
 def _truncate_head(text, limit):
@@ -1229,6 +1275,15 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
 
+    create_parser = subparsers.add_parser(
+        "create",
+        help="Create a task file template.",
+    )
+    create_parser.add_argument(
+        "filename",
+        help="Filename for the new task file.",
+    )
+
     subparsers.add_parser(
         "top",
         help="Show running Codex sessions.",
@@ -1238,6 +1293,9 @@ def main(argv=None):
     if args.command is None:
         parser.print_help()
         raise SystemExit(2)
+    if args.command == "create":
+        _create_task_template(args.filename)
+        return
     if args.command == "top":
         _run_top([])
         return
