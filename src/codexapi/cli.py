@@ -1081,7 +1081,7 @@ def main(argv=None):
     task_parser.add_argument(
         "-p",
         "--project",
-        help="GitHub Project reference to pull tasks from.",
+        help="When using -p, also pass -n agent_name TASK_FILE1 [TASK_FILE2 ...].",
     )
     task_parser.add_argument(
         "-s",
