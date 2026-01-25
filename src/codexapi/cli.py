@@ -6,6 +6,7 @@ import select
 import shutil
 import subprocess
 import sys
+import time
 import termios
 import tty
 from datetime import datetime
@@ -23,6 +24,7 @@ _SESSION_ID_RE = re.compile(
 _TAIL_BYTES = 256 * 1024
 _TAIL_MAX_BYTES = 4 * 1024 * 1024
 _TAIL_MIN_LINES = 200
+_PROJECT_LOOP_SLEEP = 30
 _ROLL_OUT_PREFIX = "rollout-"
 _SCIENCE_TEMPLATE = (
     "Good afternoon! We have a fun task today - take a good look around this repo "
@@ -1128,6 +1130,11 @@ def main(argv=None):
         action="store_true",
         help="Suppress progress output during verification.",
     )
+    task_parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="With -p, keep taking tasks and wait when none are available.",
+    )
 
     ralph_parser = subparsers.add_parser(
         "ralph",
@@ -1363,24 +1370,49 @@ def main(argv=None):
             raise SystemExit("--name is required with --project.")
         if not args.task_args:
             raise SystemExit("task --project requires one or more task files.")
-        try:
-            from .gh_integration import GhTaskRunner
-        except ImportError as exc:
-            raise SystemExit("gh-task is required for --project. Install it with pip.") from exc
+        from .gh_integration import GhTaskRunner
+        from gh_task.errors import TakeError
 
-        task_runner = GhTaskRunner(
-            args.project,
-            args.name,
-            args.task_args,
-            args.status,
-            args.cwd,
-            args.yolo,
-            args.flags,
-        )
-        result = task_runner(progress=not args.quiet)
-        if not result.success:
-            raise SystemExit(1)
-        return
+        if args.loop:
+            while True:
+                try:
+                    task_runner = GhTaskRunner(
+                        args.project,
+                        args.name,
+                        args.task_args,
+                        args.status,
+                        args.cwd,
+                        args.yolo,
+                        args.flags,
+                    )
+                except TakeError as exc:
+                    print(str(exc), file=sys.stderr)
+                    print(
+                        f"Waiting {_PROJECT_LOOP_SLEEP}s for new tasks...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(_PROJECT_LOOP_SLEEP)
+                    continue
+                result = task_runner(progress=not args.quiet)
+                if not result.success:
+                    raise SystemExit(1)
+        else:
+            try:
+                task_runner = GhTaskRunner(
+                    args.project,
+                    args.name,
+                    args.task_args,
+                    args.status,
+                    args.cwd,
+                    args.yolo,
+                    args.flags,
+                )
+            except TakeError as exc:
+                raise SystemExit(str(exc)) from None
+            result = task_runner(progress=not args.quiet)
+            if not result.success:
+                raise SystemExit(1)
+            return
 
     if args.command == "task" and args.task_file:
         if args.task_args:
@@ -1449,6 +1481,8 @@ def main(argv=None):
     if args.command == "task":
         if args.project:
             raise SystemExit("task --project already handled earlier.")
+        if args.loop:
+            raise SystemExit("--loop is only supported with -p.")
         if args.item is not None:
             raise SystemExit("--item is only supported with -f.")
         if args.max_iterations is None:
