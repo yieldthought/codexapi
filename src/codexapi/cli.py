@@ -1370,7 +1370,7 @@ def main(argv=None):
             raise SystemExit("--name is required with --project.")
         if not args.task_args:
             raise SystemExit("task --project requires one or more task files.")
-        from .gh_integration import GhTaskRunner
+        from .gh_integration import GhTaskRunner, project_url
         from gh_task.errors import TakeError
 
         if args.loop:
@@ -1393,6 +1393,11 @@ def main(argv=None):
                     )
                     time.sleep(_PROJECT_LOOP_SLEEP)
                     continue
+                if not args.quiet:
+                    title = task_runner.issue_title or "Untitled issue"
+                    print(
+                        f"Task {task_runner.task_name}: {title} on {project_url(task_runner.project)}"
+                    )
                 result = task_runner(progress=not args.quiet)
                 if not result.success:
                     raise SystemExit(1)
@@ -1409,6 +1414,11 @@ def main(argv=None):
                 )
             except TakeError as exc:
                 raise SystemExit(str(exc)) from None
+            if not args.quiet:
+                title = task_runner.issue_title or "Untitled issue"
+                print(
+                    f"Task {task_runner.task_name}: {title} on {project_url(task_runner.project)}"
+                )
             result = task_runner(progress=not args.quiet)
             if not result.success:
                 raise SystemExit(1)

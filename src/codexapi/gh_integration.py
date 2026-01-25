@@ -23,6 +23,25 @@ def _canonical_task_name(path):
     return Path(path).stem
 
 
+def project_url(project):
+    """Return a GitHub URL for the Project board."""
+    owner = project.owner
+    number = project.number
+    try:
+        owner_type = project._get_owner_type()
+    except Exception:
+        owner_type = None
+    if owner_type == "organization":
+        prefix = "orgs"
+    elif owner_type == "user":
+        prefix = "users"
+    else:
+        prefix = None
+    if prefix:
+        return f"https://github.com/{prefix}/{owner}/projects/{number}"
+    return f"https://github.com/{owner}/projects/{number}"
+
+
 def _task_file_map(task_files):
     mapping = {}
     for path in task_files:
@@ -211,6 +230,8 @@ class GhTaskRunner:
         except Exception:
             self.project.release(self.issue)
             raise
+        self.task_name = _canonical_task_name(task_path)
+        self.issue_title = (self.issue.title or "").strip()
         body = self.project.get_issue_body(self.issue)
         description = _strip_progress_section(body)
         item_text = _format_item_text(self.issue, description)
