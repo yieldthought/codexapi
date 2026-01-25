@@ -152,15 +152,17 @@ def _format_elapsed(seconds):
     return f"{hours}h{minutes:02d}m{seconds:02d}s"
 
 
-def _format_turns(attempt, total):
+def _format_turns(iteration, total):
     if total:
-        width = max(2, len(str(total)))
+        width = len(str(total))
         total_text = str(total)
     else:
-        width = 2
+        width = len(str(iteration))
         total_text = "∞"
-    attempt_text = f"{attempt:0{width}d}"
-    return f"{attempt_text}/{total_text}"
+    if width < 1:
+        width = 1
+    iteration_text = f"{iteration:0{width}d}"
+    return f"{iteration_text}/{total_text}"
 
 
 def estimate(prompt, agent_output, check_output, cwd, yolo, flags, previous_total):
@@ -190,21 +192,21 @@ def _success_prompt():
 
 def _failure_prompt(error):
     return (
-        "We ran out of attempts. Summarize what you did and what is still failing.\n\n"
+        "We ran out of iterations. Summarize what you did and what is still failing.\n\n"
         f"Outstanding issues:\n{error}"
     )
 
 
 class TaskFailed(RuntimeError):
-    """Raised when a task hits the maximum attempts without success."""
+    """Raised when a task hits the maximum iterations without success."""
 
-    def __init__(self, summary, attempts=None, errors=None):
-        message = "Task failed after maximum attempts."
+    def __init__(self, summary, iterations=None, errors=None):
+        message = "Task failed after maximum iterations."
         if summary:
             message = f"{message}\n{summary}"
         super().__init__(message)
         self.summary = summary
-        self.attempts = attempts
+        self.iterations = iterations
         self.errors = errors
 
 
@@ -235,7 +237,7 @@ def task(
         prompt: The task prompt to run.
         check: False to skip verification, None for the default check, or
             a string check prompt. The string "None" skips verification.
-        max_iterations: Maximum number of task attempts (0 means unlimited).
+        max_iterations: Maximum number of task iterations (0 means unlimited).
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
         flags: Additional raw CLI flags to pass to Codex.
@@ -249,7 +251,7 @@ def task(
         The agent's response text when the task succeeds.
 
     Raises:
-        TaskFailed: when the task reaches the maximum attempts without success.
+        TaskFailed: when the task reaches the maximum iterations without success.
     """
     result = task_result(
         prompt,
@@ -266,7 +268,7 @@ def task(
     )
     if result.success:
         return result.summary
-    raise TaskFailed(result.summary, result.attempts, result.errors)
+    raise TaskFailed(result.summary, result.iterations, result.errors)
 
 
 def task_result(
@@ -284,7 +286,7 @@ def task_result(
 ):
     """Run a prompt with optional checker-driven retries and return TaskResult.
 
-    The runner keeps a single session. Each verification attempt uses a fresh,
+    The runner keeps a single session. Each verification iteration uses a fresh,
     stateless agent call. When progress is True, show progress updates each round.
 
     Hook strings mirror task file keys: set_up, tear_down, on_success, on_failure.
@@ -317,10 +319,10 @@ def task_result(
 class TaskResult:
     """Outcome summary for a task run."""
 
-    def __init__(self, success, summary, attempts, errors, thread_id):
+    def __init__(self, success, summary, iterations, errors, thread_id):
         self.success = success
         self.summary = summary
-        self.attempts = attempts
+        self.iterations = iterations
         self.errors = errors
         self.thread_id = thread_id
 
@@ -328,7 +330,7 @@ class TaskResult:
         return (
             "TaskResult("
             f"success={self.success}, "
-            f"attempts={self.attempts}, "
+            f"iterations={self.iterations}, "
             f"errors={self.errors!r}, "
             f"thread_id={self.thread_id!r}, "
             f"summary={self.summary!r}"
@@ -350,16 +352,16 @@ class Task:
     def __init__(
         self,
         prompt,
-        max_attempts=DEFAULT_MAX_ITERATIONS,
+        max_iterations=DEFAULT_MAX_ITERATIONS,
         cwd=None,
         yolo=True,
         thread_id=None,
         flags=None,
     ):
-        if max_attempts < 0:
-            raise ValueError("max_attempts must be >= 0")
+        if max_iterations < 0:
+            raise ValueError("max_iterations must be >= 0")
         self.prompt = prompt
-        self.max_attempts = max_attempts
+        self.max_iterations = max_iterations
         self.cwd = cwd
         self.last_output = None
         self.last_check_output = None
@@ -478,7 +480,7 @@ class Task:
                 start_time = time.monotonic()
                 self.on_progress(
                     0,
-                    self.max_attempts,
+                    self.max_iterations,
                     self._progress_total,
                     remaining,
                     None,
@@ -492,11 +494,11 @@ class Task:
             if debug:
                 _logger.debug("Initial output: %s", output)
 
-            # Try correcting it up to max_attempts times
+            # Try correcting it up to max_iterations times
             error = None
-            attempt = 0
+            iteration = 0
             while True:
-                attempt += 1
+                iteration += 1
                 error = self.check(self.last_output)
                 if debug:
                     _logger.debug("Check error: %s", error)
@@ -520,18 +522,18 @@ class Task:
                     self._progress_total = total_estimate
                     elapsed = _format_elapsed(time.monotonic() - start_time)
                     status_prefix = (
-                        f"[{_format_turns(attempt, self.max_attempts)} @ {elapsed}]"
+                        f"[{_format_turns(iteration, self.max_iterations)} @ {elapsed}]"
                     )
                     is_final = not error or (
-                        self.max_attempts and attempt >= self.max_attempts
+                        self.max_iterations and iteration >= self.max_iterations
                     )
                     if is_final:
                         marker = "✅" if not error else "❌"
                         summary = f"{marker} {summary}".strip()
                     status_line = f"{status_prefix}: {summary}".rstrip()
                     self.on_progress(
-                        attempt,
-                        self.max_attempts,
+                        iteration,
+                        self.max_iterations,
                         total_estimate,
                         remaining,
                         status_line,
@@ -543,20 +545,20 @@ class Task:
                     result = TaskResult(
                         True,
                         summary,
-                        attempt,
+                        iteration,
                         None,
                         self.agent.thread_id,
                     )
                     self.on_success(result)
                     return result
-                if self.max_attempts and attempt >= self.max_attempts:
+                if self.max_iterations and iteration >= self.max_iterations:
                     summary = self.agent(self.failure_prompt(error))
                     if debug:
                         _logger.debug("Failure summary: %s", summary)
                     result = TaskResult(
                         False,
                         summary,
-                        attempt,
+                        iteration,
                         error,
                         self.agent.thread_id,
                     )
@@ -580,7 +582,7 @@ class AutoTask(Task):
         self,
         prompt,
         check=None,
-        max_attempts=DEFAULT_MAX_ITERATIONS,
+        max_iterations=DEFAULT_MAX_ITERATIONS,
         cwd=None,
         yolo=True,
         thread_id=None,
@@ -592,9 +594,9 @@ class AutoTask(Task):
     ):
         if not (check is None or check is False or isinstance(check, str)):
             raise TypeError("check must be a string or False")
-        if max_attempts < 0:
-            raise ValueError("max_attempts must be >= 0")
-        super().__init__(prompt, max_attempts, cwd, yolo, thread_id, flags)
+        if max_iterations < 0:
+            raise ValueError("max_iterations must be >= 0")
+        super().__init__(prompt, max_iterations, cwd, yolo, thread_id, flags)
         self.check_text = check
         self._set_up = _validate_hook("set_up", set_up)
         self._tear_down = _validate_hook("tear_down", tear_down)

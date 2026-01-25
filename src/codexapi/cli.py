@@ -1046,7 +1046,7 @@ def main(argv=None):
         type=int,
         default=None,
         help=(
-            "Max agent attempts (0 means unlimited). "
+            "Max agent iterations (0 means unlimited). "
             f"Defaults to {DEFAULT_MAX_ITERATIONS}."
         ),
     )

@@ -185,8 +185,8 @@ def _run_item(
 
     summary = ""
     success = False
-    attempts = None
-    max_attempts = None
+    iterations = None
+    max_iterations = None
     try:
         task = TaskFile(
             task_file,
@@ -196,17 +196,17 @@ def _run_item(
             thread_id=None,
             flags=flags,
         )
-        max_attempts = task.max_attempts
+        max_iterations = task.max_iterations
         result = task()
         success = result.success
-        attempts = result.attempts
+        iterations = result.iterations
         summary = result.summary or ""
     except Exception as exc:
         summary = f"{type(exc).__name__}: {exc}"
         success = False
 
     summary = _single_line(summary)
-    turns = _format_turns(attempts, max_attempts)
+    turns = _format_turns(iterations, max_iterations)
     if summary:
         summary = f"{summary} {turns}"
     else:

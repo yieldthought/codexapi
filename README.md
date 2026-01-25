@@ -65,7 +65,7 @@ Progress is shown by default for `codexapi task`; use `--quiet` to suppress it.
 When using `--item`, the task file must include at least one `{{item}}` placeholder.
 
 Task files default to using the standard check prompt for the task. Set `check: "None"` to skip verification.
-Use `max_iterations` in the task file to override the default attempt cap (0 means unlimited).
+Use `max_iterations` in the task file to override the default iteration cap (0 means unlimited).
 Checks are wrapped with the verifier prompt, include the agent output, and expect JSON with `success`/`reason`.
 
 Example task progress run:
@@ -143,10 +143,10 @@ the same conversation and returns only the agent's message.
 ### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 
 Runs a task with checker-driven retries and returns the success summary.
-Raises `TaskFailed` when the maximum attempts are reached.
+Raises `TaskFailed` when the maximum iterations are reached.
 
 - `check` (str | None | False): custom check prompt, default checker, or `False`/`"None"` to skip.
-- `max_iterations` (int): maximum number of task attempts (0 means unlimited).
+- `max_iterations` (int): maximum number of task iterations (0 means unlimited).
 - `progress` (bool): show a tqdm progress bar with a one-line status after each round.
 - `set_up`/`tear_down`/`on_success`/`on_failure` (str | None): optional hook prompts.
 
@@ -156,7 +156,7 @@ Runs a task with checker-driven retries and returns a `TaskResult` without
 raising `TaskFailed`.
 Arguments mirror `task()` (including hooks).
 
-### `Task(prompt, max_attempts=10, cwd=None, yolo=True, thread_id=None, flags=None)`
+### `Task(prompt, max_iterations=10, cwd=None, yolo=True, thread_id=None, flags=None)`
 
 Runs a Codex task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
@@ -171,22 +171,22 @@ default check prompt and includes the agent output.
 - `on_success(result)`: optional success hook.
 - `on_failure(result)`: optional failure hook.
 
-### `TaskResult(success, summary, attempts, errors, thread_id)`
+### `TaskResult(success, summary, iterations, errors, thread_id)`
 
 Simple result object returned by `Task.__call__`.
 
 - `success` (bool): whether the task completed successfully.
 - `summary` (str): agent summary of what happened.
-- `attempts` (int): how many attempts were used.
+- `iterations` (int): how many iterations were used.
 - `errors` (str | None): last checker error, if any.
 - `thread_id` (str | None): Codex thread id for the session.
 
 ### `TaskFailed`
 
-Exception raised by `task()` when attempts are exhausted.
+Exception raised by `task()` when iterations are exhausted.
 
 - `summary` (str): failure summary text.
-- `attempts` (int | None): attempts made when the task failed.
+- `iterations` (int | None): iterations made when the task failed.
 - `errors` (str | None): last checker error, if any.
 
 ### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None) -> ForeachResult`
