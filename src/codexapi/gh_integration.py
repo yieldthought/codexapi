@@ -230,6 +230,11 @@ class GhTaskRunner:
         except Exception:
             self.project.release(self.issue)
             raise
+        try:
+            self.project.move(self.issue, "In progress")
+        except Exception:
+            self.project.release(self.issue)
+            raise
         self.task_name = _canonical_task_name(task_path)
         self.issue_title = (self.issue.title or "").strip()
         body = self.project.get_issue_body(self.issue)
