@@ -68,6 +68,16 @@ Task files default to using the standard check prompt for the task. Set `check: 
 Use `max_iterations` in the task file to override the default iteration cap (0 means unlimited).
 Checks are wrapped with the verifier prompt, include the agent output, and expect JSON with `success`/`reason`.
 
+Take tasks from a GitHub Project (requires `gh-task`):
+
+```bash
+codexapi task -p owner/projects/3 -n "Your Name" -s Backlog task_a.yaml task_b.yaml
+```
+
+Task labels are derived from task filenames (basename without extension). The
+issue title/body become `{{item}}` after removing any existing `## Progress`
+section.
+
 Example task progress run:
 
 ```bash

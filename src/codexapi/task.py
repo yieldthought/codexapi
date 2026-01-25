@@ -370,8 +370,10 @@ class Task:
         self._yolo = yolo
         self._flags = flags
         self._progress_enabled = False
+        self._progress_updates = False
         self._progress_bar = None
         self._progress_total = None
+        self._progress_start = None
         self.agent = Agent(
             cwd,
             yolo,
@@ -465,8 +467,9 @@ class Task:
             # If this fails in the middle we will still try to tear down
             self.set_up()
 
+            progress_updates = progress or self._progress_updates
             self._progress_enabled = progress
-            if progress:
+            if progress_updates:
                 remaining, _summary = estimate(
                     self.prompt,
                     "",
@@ -478,6 +481,7 @@ class Task:
                 )
                 self._progress_total = remaining
                 start_time = time.monotonic()
+                self._progress_start = start_time
                 self.on_progress(
                     0,
                     self.max_iterations,
@@ -487,6 +491,7 @@ class Task:
                 )
             else:
                 start_time = time.monotonic()
+                self._progress_start = start_time
 
             # Start with the initial prompt
             output = self.agent(self.prompt)
@@ -503,7 +508,7 @@ class Task:
                 if debug:
                     _logger.debug("Check error: %s", error)
 
-                if progress:
+                if progress_updates:
                     check_output = self.last_check_output
                     if self.check_skipped:
                         check_output = "Verification skipped."

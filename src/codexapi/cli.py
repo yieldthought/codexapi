@@ -1033,9 +1033,25 @@ def main(argv=None):
         help="Item value for task files that use {{item}} placeholders.",
     )
     task_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Prompt to send. Use '-' or omit to read from stdin.",
+        "-p",
+        "--project",
+        help="GitHub Project reference to pull tasks from.",
+    )
+    task_parser.add_argument(
+        "-s",
+        "--status",
+        default="Backlog",
+        help="Status name to take from when using --project (default: Backlog).",
+    )
+    task_parser.add_argument(
+        "-n",
+        "--name",
+        help="Owner label name for gh-task when using --project.",
+    )
+    task_parser.add_argument(
+        "task_args",
+        nargs="*",
+        help="Prompt to send (no --project) or task files (with --project).",
     )
     task_parser.add_argument(
         "--check",
@@ -1276,8 +1292,40 @@ def main(argv=None):
         if args.ralph_fresh is None:
             args.ralph_fresh = True
 
+    if args.command == "task" and args.project:
+        if args.task_file:
+            raise SystemExit("task --project does not allow -f.")
+        if args.item is not None:
+            raise SystemExit("--item is only supported with -f.")
+        if args.check is not None:
+            raise SystemExit("--check is not allowed with --project.")
+        if args.max_iterations is not None:
+            raise SystemExit("--max-iterations is not allowed with --project.")
+        if not args.name:
+            raise SystemExit("--name is required with --project.")
+        if not args.task_args:
+            raise SystemExit("task --project requires one or more task files.")
+        try:
+            from .gh_integration import GhTaskRunner
+        except ImportError as exc:
+            raise SystemExit("gh-task is required for --project. Install it with pip.") from exc
+
+        task_runner = GhTaskRunner(
+            args.project,
+            args.name,
+            args.task_args,
+            args.status,
+            args.cwd,
+            args.yolo,
+            args.flags,
+        )
+        result = task_runner(progress=not args.quiet)
+        if not result.success:
+            raise SystemExit(1)
+        return
+
     if args.command == "task" and args.task_file:
-        if args.prompt:
+        if args.task_args:
             raise SystemExit("task -f does not take a prompt.")
         if args.item is not None:
             task_def = load_task_file(args.task_file)
@@ -1303,11 +1351,13 @@ def main(argv=None):
         return
 
     prompt_source = None
-    if args.command in ("run", "ralph", "task"):
+    prompt = None
+    if args.command in ("run", "ralph"):
         prompt_source = args.prompt
     elif args.command == "science":
         prompt_source = args.task
-    prompt = _read_prompt(prompt_source)
+    if args.command != "task":
+        prompt = _read_prompt(prompt_source)
     exit_code = 0
     message = None
 
@@ -1339,6 +1389,8 @@ def main(argv=None):
         )
         return
     if args.command == "task":
+        if args.project:
+            raise SystemExit("task --project already handled earlier.")
         if args.item is not None:
             raise SystemExit("--item is only supported with -f.")
         if args.max_iterations is None:
@@ -1347,6 +1399,12 @@ def main(argv=None):
             raise SystemExit("--max-iterations must be >= 0.")
         check = args.check
         try:
+            task_args = args.task_args or []
+            if len(task_args) > 1:
+                raise SystemExit("task takes a single prompt unless --project is used.")
+            if task_args:
+                prompt_source = task_args[0]
+            prompt = _read_prompt(prompt_source)
             task(
                 prompt,
                 check,
