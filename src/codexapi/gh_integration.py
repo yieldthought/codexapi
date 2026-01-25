@@ -64,7 +64,7 @@ def _match_task_file(issue, task_map):
 def _strip_progress_section(body):
     if not body:
         return ""
-    match = re.search(r"(?m)^## Progress\\s*$", body)
+    match = re.search(r"(?m)^## Progress\s*$", body)
     if not match:
         return body.strip()
     return body[:match.start()].rstrip()
@@ -78,7 +78,7 @@ def _format_item_text(issue, description):
 
 
 def _format_status_line(status_line):
-    match = re.match(r"^\\[(?P<turns>[^ ]+) @ (?P<elapsed>[^\\]]+)\\]:\\s*(?P<summary>.*)$", status_line)
+    match = re.match(r"^\[(?P<turns>[^ ]+) @ (?P<elapsed>[^\]]+)\]:\s*(?P<summary>.*)$", status_line)
     if not match:
         return status_line
     summary = match.group("summary").strip()
