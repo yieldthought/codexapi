@@ -1040,8 +1040,8 @@ def main(argv=None):
     task_parser.add_argument(
         "-s",
         "--status",
-        default="Backlog",
-        help="Status name to take from when using --project (default: Backlog).",
+        default="Ready",
+        help="Status name to take from when using --project (default: Ready).",
     )
     task_parser.add_argument(
         "-n",

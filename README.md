@@ -71,7 +71,7 @@ Checks are wrapped with the verifier prompt, include the agent output, and expec
 Take tasks from a GitHub Project (requires `gh-task`):
 
 ```bash
-codexapi task -p owner/projects/3 -n "Your Name" -s Backlog task_a.yaml task_b.yaml
+codexapi task -p owner/projects/3 -n "Your Name" -s Ready task_a.yaml task_b.yaml
 ```
 
 Task labels are derived from task filenames (basename without extension). The

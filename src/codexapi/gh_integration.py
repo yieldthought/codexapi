@@ -197,7 +197,7 @@ class GhTaskRunner:
         project,
         name,
         task_files,
-        status="Backlog",
+        status="Ready",
         cwd=None,
         yolo=True,
         flags=None,
