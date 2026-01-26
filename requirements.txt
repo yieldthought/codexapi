@@ -1,3 +1,3 @@
 PyYAML>=6.0
 tqdm>=4.64
-gh-task
+gh-task>=0.1.7

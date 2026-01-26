@@ -5,7 +5,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from gh_task.project import Project
+from gh_task.project import Project, UPDATE_STATUS_MUTATION
 
 from .taskfile import TaskFile
 
@@ -17,6 +17,7 @@ _SUCCESS_LABEL = "✓"
 _FAILURE_LABEL = "⨉"
 _SUCCESS_COLOR = "2da44e"
 _FAILURE_COLOR = "d73a4a"
+_OWNER_PREFIX = "owner:"
 
 
 def _canonical_task_name(path):
@@ -40,6 +41,63 @@ def project_url(project):
     if prefix:
         return f"https://github.com/{prefix}/{owner}/projects/{number}"
     return f"https://github.com/{owner}/projects/{number}"
+
+
+def reset_project_tasks(project, name, description=False):
+    """Reset owned issues in a project back to Ready."""
+    project = Project(project, name)
+    owner_projects = {}
+    issues = []
+    for status in project.statuses():
+        for issue in project.list(status, return_issue=True):
+            issue = project.get_issue(issue, require_project_item=True)
+            labels = issue.labels or []
+            owner_labels = [label for label in labels if label.lower().startswith(_OWNER_PREFIX)]
+            if not owner_labels:
+                continue
+            issues.append((issue, owner_labels))
+
+    ready_name, ready_option = project._resolve_status("Ready")
+    project._ensure_project_loaded()
+    try:
+        project._resolve_number_field("Estimate")
+        estimate_supported = True
+    except Exception:
+        estimate_supported = False
+
+    for issue, owner_labels in issues:
+        owner_name = None
+        for label in owner_labels:
+            parts = label.split(":", 1)
+            if len(parts) == 2 and parts[1].strip():
+                owner_name = parts[1].strip()
+                break
+        if owner_name and estimate_supported:
+            owner_project = owner_projects.get(owner_name)
+            if owner_project is None:
+                owner_project = Project(project.owner + "/projects/" + str(project.number), owner_name)
+                owner_projects[owner_name] = owner_project
+            owner_project.set_estimate(issue, None)
+        for label in owner_labels:
+            project._remove_label(issue, label)
+        project._remove_label(issue, _SUCCESS_LABEL)
+        project._remove_label(issue, _FAILURE_LABEL)
+        if (issue.status or "").lower() != ready_name.lower():
+            project.client.graphql(
+                UPDATE_STATUS_MUTATION,
+                {
+                    "projectId": project._project_id,
+                    "itemId": issue.project_item_id,
+                    "fieldId": project._status_field_id,
+                    "optionId": ready_option,
+                },
+            )
+        if description:
+            body = issue.body if issue.body is not None else project.get_issue_body(issue)
+            cleaned = _strip_progress_section(body)
+            if cleaned != body:
+                project.set_issue_body(issue, cleaned)
+    return [issue for issue, _labels in issues]
 
 
 def _task_file_map(task_files):

@@ -1291,6 +1291,29 @@ def main(argv=None):
         help="Filename for the new task file.",
     )
 
+    reset_parser = subparsers.add_parser(
+        "reset",
+        help="Reset project tasks back to Ready.",
+    )
+    reset_parser.add_argument(
+        "-p",
+        "--project",
+        required=True,
+        help="GitHub Project ref (owner/projects/3).",
+    )
+    reset_parser.add_argument(
+        "-n",
+        "--name",
+        default="reset",
+        help="Owner label name for gh-task (default: reset).",
+    )
+    reset_parser.add_argument(
+        "-d",
+        "--description",
+        action="store_true",
+        help="Remove any Progress section in the issue body.",
+    )
+
     subparsers.add_parser(
         "top",
         help="Show running Codex sessions.",
@@ -1302,6 +1325,15 @@ def main(argv=None):
         raise SystemExit(2)
     if args.command == "create":
         _create_task_template(args.filename)
+        return
+    if args.command == "reset":
+        from .gh_integration import reset_project_tasks
+
+        issues = reset_project_tasks(args.project, args.name, args.description)
+        for issue in issues:
+            title = (issue.title or "Untitled issue").strip()
+            print(f"{issue.repo}#{issue.number} {title}")
+        print(f"Reset {len(issues)} task(s).")
         return
     if args.command == "top":
         _run_top([])
