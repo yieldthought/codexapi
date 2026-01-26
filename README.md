@@ -79,6 +79,12 @@ Take tasks from a GitHub Project (requires `gh-task`):
 ```bash
 codexapi task -p owner/projects/3 -n "Your Name" -s Ready task_a.yaml task_b.yaml
 ```
+Reset owned tasks on a GitHub Project back to Ready:
+
+```bash
+codexapi reset -p owner/projects/3
+codexapi reset -p owner/projects/3 -d   # also removes the Progress section
+```
 
 Task labels are derived from task filenames (basename without extension). The
 issue title/body become `{{item}}` after removing any existing `## Progress`
