@@ -12,174 +12,210 @@ _STATE_FILE = "ralph-loop.local.md"
 _PROMISE_RE = re.compile(r"<promise>(.*?)</promise>", re.DOTALL)
 
 
-def run_ralph_loop(
-    prompt,
-    cwd=None,
-    yolo=True,
-    flags=None,
-    max_iterations=0,
-    completion_promise=None,
-    fresh=True,
-):
-    """Run a Ralph Wiggum-style loop that repeats the same prompt.
+class Ralph:
+    """Ralph Wiggum-style loop runner for repeating the same prompt."""
 
-    The loop writes `.codexapi/ralph-loop.local.md` in the target cwd and keeps
-    sending the exact same prompt each iteration until one of these happens:
-    - A completion promise is matched.
-    - `max_iterations` is reached (0 means unlimited).
-    - The state file is removed (cancel).
-    - An error or KeyboardInterrupt.
-
-    To complete with a promise, the agent must output:
-        <promise>TEXT</promise>
-    `TEXT` is trimmed and whitespace-collapsed before an exact match against
-    `completion_promise`. CRITICAL RULE: If a completion promise is set, you
-    may ONLY output it when the statement is completely and unequivocally TRUE.
-    Do not output false promises to escape the loop.
-
-    By default each iteration uses a fresh Agent for a clean context. Set
-    `fresh=False` to reuse a single Agent instance for shared context.
-    Cancel by deleting the state file or running `codexapi ralph --cancel`.
-    """
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError("prompt must be a non-empty string")
-    if completion_promise is not None and not isinstance(completion_promise, str):
-        raise TypeError("completion_promise must be a string or None")
-    if max_iterations < 0:
-        raise ValueError("max_iterations must be >= 0")
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)
-
-    state_path = _state_path(cwd)
-    _ensure_state_dir(state_path)
-
-    started_at = _utc_now()
-    iteration = 1
-    _write_state(
-        state_path,
-        iteration,
-        max_iterations,
-        completion_promise,
-        started_at,
+    def __init__(
+        self,
         prompt,
-    )
+        cwd=None,
+        yolo=True,
+        flags=None,
+        max_iterations=0,
+        completion_promise=None,
+        fresh=True,
+    ):
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt must be a non-empty string")
+        if completion_promise is not None and not isinstance(
+            completion_promise,
+            str,
+        ):
+            raise TypeError("completion_promise must be a string or None")
+        if max_iterations < 0:
+            raise ValueError("max_iterations must be >= 0")
+        self.prompt = prompt
+        self.cwd = cwd
+        self.yolo = yolo
+        self.flags = flags
+        self.max_iterations = max_iterations
+        self.completion_promise = completion_promise
+        self.fresh = fresh
 
-    max_label = str(max_iterations) if max_iterations > 0 else "unlimited"
-    if completion_promise is None:
-        promise_label = "none (runs forever)"
-    else:
-        promise_label = (
-            f"{completion_promise} (ONLY output when TRUE - do not lie!)"
+    def hook_before_loop(self):
+        """Hook called once before the loop starts."""
+
+    def hook_before_iteration(self, iteration):
+        """Hook called before each iteration."""
+
+    def hook_after_iteration(self, iteration, message):
+        """Hook called after each iteration completes."""
+
+    def hook_after_loop(self, last_message, stop_reason):
+        """Hook called after the loop exits."""
+
+    def build_prompt(self, iteration):
+        """Return the prompt for this iteration."""
+        return self.prompt
+
+    def __call__(self):
+        """Run the loop until completion or cancellation."""
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(line_buffering=True)
+
+        state_path = _state_path(self.cwd)
+        _ensure_state_dir(state_path)
+
+        started_at = _utc_now()
+        iteration = 1
+        _write_state(
+            state_path,
+            iteration,
+            self.max_iterations,
+            self.completion_promise,
+            started_at,
+            self.prompt,
         )
 
-    print(
-        "\n".join(
-            [
-                "Ralph loop activated.",
-                "",
-                f"Iteration: {iteration}",
-                f"Max iterations: {max_label}",
-                f"Completion promise: {promise_label}",
-                "",
-                "The loop will resend the SAME PROMPT each iteration.",
-                "Cancel by deleting .codexapi/ralph-loop.local.md or running",
-                "codexapi ralph --cancel.",
-                "No manual stop beyond max iterations or completion promise.",
-                "",
-                "To monitor: head -10 .codexapi/ralph-loop.local.md",
-                "",
-            ]
+        max_label = (
+            str(self.max_iterations) if self.max_iterations > 0 else "unlimited"
         )
-    )
-    print(prompt)
+        if self.completion_promise is None:
+            promise_label = "none (runs forever)"
+        else:
+            promise_label = (
+                f"{self.completion_promise} (ONLY output when TRUE - do not lie!)"
+            )
 
-    if completion_promise is not None:
         print(
             "\n".join(
                 [
+                    "Ralph loop activated.",
                     "",
-                    "CRITICAL - Ralph Loop Completion Promise",
+                    f"Iteration: {iteration}",
+                    f"Max iterations: {max_label}",
+                    f"Completion promise: {promise_label}",
                     "",
-                    "To complete this loop, output this EXACT text:",
-                    f"  <promise>{completion_promise}</promise>",
+                    "The loop will resend the SAME PROMPT each iteration.",
+                    "Cancel by deleting .codexapi/ralph-loop.local.md or running",
+                    "codexapi ralph --cancel.",
+                    "No manual stop beyond max iterations or completion promise.",
                     "",
-                    "STRICT REQUIREMENTS (DO NOT VIOLATE):",
-                    "  - Use <promise> XML tags EXACTLY as shown above",
-                    "  - The statement MUST be completely and unequivocally TRUE",
-                    "  - Do NOT output false statements to exit the loop",
-                    "  - Do NOT lie even if you think you should exit",
-                    "",
-                    "CRITICAL RULE: If a completion promise is set, you may ONLY",
-                    "output it when the statement is completely and unequivocally",
-                    "TRUE. Do not output false promises to escape the loop, even if",
-                    "you think you're stuck or should exit for other reasons. The",
-                    "loop is designed to continue until genuine completion.",
+                    "To monitor: head -10 .codexapi/ralph-loop.local.md",
                     "",
                 ]
             )
         )
+        print(self.prompt)
 
-    runner = None
-    last_message = None
-    state_missing = False
-
-    try:
-        while True:
-            if not os.path.exists(state_path):
-                state_missing = True
-                print("Ralph loop canceled: state file removed.")
-                return last_message
-
-            print(_status_line(iteration, completion_promise))
-
-            if fresh:
-                runner = Agent(cwd, yolo, None, flags)
-            elif runner is None:
-                runner = Agent(cwd, yolo, None, flags)
-
-            message = runner(prompt + '\nIf there are multiple paths forward, you MUST use your own best judgement as to which to try first! Do not ask the user to choose an option, they hereby give you explciit permission to pick the best one yourself.\n')
-            print(message)
-            last_message = message
-
-            if not os.path.exists(state_path):
-                state_missing = True
-                print("Ralph loop canceled: state file removed.")
-                return last_message
-
-            if max_iterations > 0 and iteration >= max_iterations:
-                print(f"Ralph loop: Max iterations ({max_iterations}) reached.")
-                return message
-
-            if promise_matches(message, completion_promise):
-                print(
-                    "Ralph loop: Detected "
-                    f"<promise>{completion_promise}</promise>"
+        if self.completion_promise is not None:
+            print(
+                "\n".join(
+                    [
+                        "",
+                        "CRITICAL - Ralph Loop Completion Promise",
+                        "",
+                        "To complete this loop, output this EXACT text:",
+                        f"  <promise>{self.completion_promise}</promise>",
+                        "",
+                        "STRICT REQUIREMENTS (DO NOT VIOLATE):",
+                        "  - Use <promise> XML tags EXACTLY as shown above",
+                        "  - The statement MUST be completely and unequivocally TRUE",
+                        "  - Do NOT output false statements to exit the loop",
+                        "  - Do NOT lie even if you think you should exit",
+                        "",
+                        "CRITICAL RULE: If a completion promise is set, you may ONLY",
+                        "output it when the statement is completely and unequivocally",
+                        "TRUE. Do not output false promises to escape the loop, even if",
+                        "you think you're stuck or should exit for other reasons. The",
+                        "loop is designed to continue until genuine completion.",
+                        "",
+                    ]
                 )
-                return message
-
-            if not os.path.exists(state_path):
-                state_missing = True
-                print("Ralph loop canceled: state file removed.")
-                return last_message
-
-            iteration += 1
-            _write_state(
-                state_path,
-                iteration,
-                max_iterations,
-                completion_promise,
-                started_at,
-                prompt,
             )
-    except KeyboardInterrupt:
-        print("Ralph loop interrupted.", file=sys.stderr)
-        raise SystemExit(130)
-    except Exception as exc:
-        print(f"Ralph loop stopped: {exc}", file=sys.stderr)
-        raise SystemExit(1)
-    finally:
-        if not state_missing:
-            _cleanup_state(state_path)
+
+        runner = None
+        last_message = None
+        state_missing = False
+        stop_reason = None
+
+        try:
+            self.hook_before_loop()
+            while True:
+                if not os.path.exists(state_path):
+                    state_missing = True
+                    stop_reason = "canceled"
+                    print("Ralph loop canceled: state file removed.")
+                    return last_message
+
+                print(_status_line(iteration, self.completion_promise))
+                self.hook_before_iteration(iteration)
+
+                if self.fresh:
+                    runner = Agent(self.cwd, self.yolo, None, self.flags)
+                elif runner is None:
+                    runner = Agent(self.cwd, self.yolo, None, self.flags)
+
+                prompt = self.build_prompt(iteration)
+                message = runner(
+                    prompt
+                    + "\nIf there are multiple paths forward, you MUST use your "
+                    "own best judgement as to which to try first! Do not ask the "
+                    "user to choose an option, they hereby give you explciit "
+                    "permission to pick the best one yourself.\n"
+                )
+                print(message)
+                last_message = message
+                self.hook_after_iteration(iteration, message)
+
+                if not os.path.exists(state_path):
+                    state_missing = True
+                    stop_reason = "canceled"
+                    print("Ralph loop canceled: state file removed.")
+                    return last_message
+
+                if self.max_iterations > 0 and iteration >= self.max_iterations:
+                    stop_reason = "max_iterations"
+                    print(
+                        f"Ralph loop: Max iterations ({self.max_iterations}) reached."
+                    )
+                    return message
+
+                if promise_matches(message, self.completion_promise):
+                    stop_reason = "promise"
+                    print(
+                        "Ralph loop: Detected "
+                        f"<promise>{self.completion_promise}</promise>"
+                    )
+                    return message
+
+                if not os.path.exists(state_path):
+                    state_missing = True
+                    stop_reason = "canceled"
+                    print("Ralph loop canceled: state file removed.")
+                    return last_message
+
+                iteration += 1
+                _write_state(
+                    state_path,
+                    iteration,
+                    self.max_iterations,
+                    self.completion_promise,
+                    started_at,
+                    self.prompt,
+                )
+        except KeyboardInterrupt:
+            stop_reason = "interrupted"
+            print("Ralph loop interrupted.", file=sys.stderr)
+            raise SystemExit(130)
+        except Exception as exc:
+            stop_reason = "error"
+            print(f"Ralph loop stopped: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        finally:
+            if not state_missing:
+                _cleanup_state(state_path)
+            self.hook_after_loop(last_message, stop_reason)
 
 
 def cancel_ralph_loop(cwd=None):

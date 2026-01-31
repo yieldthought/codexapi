@@ -14,7 +14,8 @@ from pathlib import Path
 
 from .agent import Agent, agent
 from .foreach import foreach
-from .ralph import cancel_ralph_loop, run_ralph_loop
+from .ralph import Ralph, cancel_ralph_loop
+from .science import Science
 from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
 from .taskfile import TaskFile, load_task_file, task_def_uses_item
 
@@ -26,22 +27,6 @@ _TAIL_MAX_BYTES = 4 * 1024 * 1024
 _TAIL_MIN_LINES = 200
 _PROJECT_LOOP_SLEEP = 30
 _ROLL_OUT_PREFIX = "rollout-"
-_SCIENCE_TEMPLATE = (
-    "Good afternoon! We have a fun task today - take a good look around this repo "
-    "and review all relevant knowledge you have. Our task is to {task}. We're "
-    "working step by step in a scientific manner so if there's a SCIENCE.md read "
-    "that first to understand the progress of the rest of the team so far. Then "
-    "try as hard as you can to find a good path forwards - run as many experiments "
-    "as you want and take your time, we have all night. Note down everything you "
-    "learn that wasn't obvious in a knowledge section in SCIENCE.md and any "
-    "experiments in a similar section. The aim is to move the ball forwards, "
-    "either by getting closer to the goal ruling out a hypothesis that doesn't "
-    "whilst understanding why. Try your best and have fun with this one! If you "
-    "think of several options, pick one and run with it - I will not be available "
-    "to make decisions for you, I give you my full permission to explore and make "
-    "your own best judgement towards our goal! Remember to update SCIENCE.md. "
-    "Good hunting!"
-)
 _TASK_TEMPLATE = (
     "prompt: |\n"
     "  Main task prompt. Required. Use {{item}} for per-item values.\n"
@@ -110,11 +95,6 @@ def _single_line(text):
         return ""
     return " ".join(text.replace("\r", " ").split())
 
-
-def _science_prompt(task):
-    if not isinstance(task, str) or not task.strip():
-        raise SystemExit("Science task must be a non-empty string.")
-    return _SCIENCE_TEMPLATE.replace("{task}", task.strip())
 
 
 def _create_task_template(path):
@@ -1496,7 +1476,7 @@ def main(argv=None):
     if args.command == "ralph":
         if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
-        run_ralph_loop(
+        Ralph(
             prompt,
             args.cwd,
             args.yolo,
@@ -1504,21 +1484,20 @@ def main(argv=None):
             args.max_iterations,
             args.completion_promise,
             args.ralph_fresh,
-        )
+        )()
         return
     if args.command == "science":
         if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
-        science_prompt = _science_prompt(prompt)
-        run_ralph_loop(
-            science_prompt,
+        Science(
+            prompt,
             args.cwd,
             args.yolo,
             args.flags,
             args.max_iterations,
             args.completion_promise,
             args.ralph_fresh,
-        )
+        )()
         return
     if args.command == "task":
         if args.project:
