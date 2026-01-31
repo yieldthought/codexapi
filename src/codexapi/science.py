@@ -3,12 +3,10 @@
 import json
 import os
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 
 from .agent import agent
+from .pushover import Pushover
 from .ralph import Ralph
 
 _SCIENCE_TEMPLATE_A = (
@@ -26,8 +24,8 @@ _SCIENCE_TEMPLATE_A = (
 _SCIENCE_TEMPLATE_B = (
     "If this task has some natural figure of merit that would demonstrate any "
     "improvements we made, mention each improvement you have made to it and what "
-    "the new best figures are (and each one's percentage improvement over the baseline) "
-    "when you are finished and report back to me. "
+    "the new best figures are (with absolute values and each one's percentage improvement "
+    "over the baseline) when you are finished and report back to me. "
     "Try your best and have fun with this one! If you "
     "think of several options, pick one and run with it - I will not be available "
     "to make decisions for you, I give you my full permission to explore and make "
@@ -35,10 +33,6 @@ _SCIENCE_TEMPLATE_B = (
     "Good hunting!"
 )
 _LOGBOOK_NAME = "LOGBOOK.md"
-_PUSHOVER_PATH = "~/.pushover"
-_PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
-_MAX_PUSHOVER_MESSAGE = 1024
-
 _TITLE_PROMPT = (
     "You are naming a run. Return a short descriptive title (max 6 words) that "
     "is likely to be unique for this task. Return only the title text, no quotes, "
@@ -54,7 +48,8 @@ _METRICS_PROMPT = (
     "'meaningfully'. If there are no clear metrics or no improvements, set "
     "new_improvement to false.\n"
     "For each metric listed, look to see if there is also a percentage improvement "
-    "associated with it - if so, include that under improvement_pct in your output."
+    "associated with it - if so, include that under improvement_pct in your output. "
+    "Always include the absolute value under value."
     "\n"
     "Return ONLY JSON with keys:\n"
     "  new_improvement: boolean\n"
@@ -120,12 +115,11 @@ class Science(Ralph):
         self._logbook_path = _logbook_path(cwd)
         self._best_metrics = None
         self._run_title = None
-        self._pushover_tokens = None
-        self._pushover_checked = False
-        self._pushover_error = None
+        self._pushover = Pushover()
 
     def hook_before_loop(self):
         super().hook_before_loop()
+        self._pushover.ensure_ready()
         self._run_title = self._build_run_title()
 
     def build_prompt(self, iteration):
@@ -147,7 +141,7 @@ class Science(Ralph):
         if not message:
             message = "New best metrics detected."
         print(message)
-        self._send_pushover(self._run_title, message)
+        self._pushover.send(self._run_title, message)
 
     def _append_logbook(self, iteration, message):
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -191,51 +185,6 @@ class Science(Ralph):
             title = _fallback_title(self._task)
         return title
 
-    def _send_pushover(self, title, message):
-        tokens = self._get_pushover_tokens()
-        if not tokens:
-            return
-        user_key, app_token = tokens
-        message = _truncate(message, _MAX_PUSHOVER_MESSAGE)
-        payload = urllib.parse.urlencode(
-            {
-                "token": app_token,
-                "user": user_key,
-                "title": title or "Science update",
-                "message": message,
-            }
-        ).encode("utf-8")
-        request = urllib.request.Request(_PUSHOVER_URL, data=payload)
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                body = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            _report_pushover_error(body, exc.code)
-            return
-        except Exception as exc:
-            _warn(f"Pushover notification failed: {exc}")
-            return
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            _warn("Pushover returned invalid JSON.")
-            return
-        if data.get("status") != 1:
-            _report_pushover_error(body, None)
-
-    def _get_pushover_tokens(self):
-        if self._pushover_checked:
-            return self._pushover_tokens
-        self._pushover_checked = True
-        try:
-            tokens = _load_pushover_tokens()
-        except ValueError as exc:
-            self._pushover_error = f"Pushover config error: {exc}"
-            _warn(self._pushover_error)
-            return None
-        self._pushover_tokens = tokens
-        return tokens
 
 
 def _build_metrics_prompt(task, message, previous_best):
@@ -304,58 +253,6 @@ def _parse_metrics(output):
     }
 
 
-def _load_pushover_tokens():
-    path = os.path.expanduser(_PUSHOVER_PATH)
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as handle:
-        lines = [line.strip() for line in handle if line.strip()]
-    if len(lines) != 2:
-        raise ValueError(
-            f"{_PUSHOVER_PATH} must contain two non-empty lines: user key then app token"
-        )
-    return lines[0], lines[1]
-
-
-def _report_pushover_error(body, status_code):
-    errors = None
-    try:
-        data = json.loads(body)
-        if isinstance(data, dict):
-            errors = data.get("errors")
-    except json.JSONDecodeError:
-        errors = None
-    message = "Pushover notification failed."
-    if status_code:
-        message = f"{message} HTTP {status_code}."
-    detail = _format_pushover_errors(errors)
-    if detail:
-        message = f"{message} {detail}"
-    _warn(message)
-
-
-def _format_pushover_errors(errors):
-    if not errors:
-        return ""
-    if isinstance(errors, str):
-        errors = [errors]
-    if not isinstance(errors, list):
-        return ""
-    cleaned = [str(error).strip() for error in errors if str(error).strip()]
-    if not cleaned:
-        return ""
-    hint = []
-    lower = " ".join(cleaned).lower()
-    if "user" in lower:
-        hint.append("Check the user key on line 1 of ~/.pushover.")
-    if "token" in lower or "application" in lower:
-        hint.append("Check the app token on line 2 of ~/.pushover.")
-    if "message" in lower:
-        hint.append("Check that the message is not empty or too long.")
-    suffix = " ".join(hint)
-    if suffix:
-        return f"{'; '.join(cleaned)} {suffix}"
-    return "; ".join(cleaned)
 
 
 def _format_notification_message(summary, metrics):
@@ -393,21 +290,11 @@ def _single_line(text):
     return " ".join(text.replace("\r", " ").split())
 
 
-def _truncate(text, limit):
-    if not text:
-        return ""
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return text[: limit - 3] + "..."
-
-
 def _fallback_title(task):
     text = _single_line(task or "").strip()
     if not text:
         return "Science run"
-    return _truncate(text, 80)
+    return text[:77] + "..." if len(text) > 80 else text
 
 
 def _warn(message):

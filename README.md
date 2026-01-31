@@ -136,7 +136,8 @@ codexapi science --no-yolo "hyper-optimize the kernel cycles" --max-iterations 3
 Optional Pushover notifications: create `~/.pushover` with two non-empty lines.
 Line 1 is your user or group key, line 2 is the app API token. When this file
 exists, Science will send a notification whenever it detects a new best result,
-including the metric values and percent improvement.
+including the metric values and percent improvement. Task runs will also send a
+✅/❌ notification with the task summary.
 
 Run a task file across a list file:
 

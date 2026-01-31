@@ -5,6 +5,7 @@ import logging
 import time
 
 from .agent import Agent, agent
+from .pushover import Pushover
 from tqdm import tqdm
 
 _logger = logging.getLogger(__name__)
@@ -163,6 +164,23 @@ def _format_turns(iteration, total):
         width = 1
     iteration_text = f"{iteration:0{width}d}"
     return f"{iteration_text}/{total_text}"
+
+
+def _format_task_message(result):
+    emoji = "✅" if result.success else "❌"
+    summary = (result.summary or "").strip()
+    if summary:
+        return f"{emoji} {summary}"
+    return emoji
+
+
+def _format_task_title(prompt):
+    title = _single_line(prompt or "").strip()
+    if not title:
+        title = "Task result"
+    if len(title) > 80:
+        return title[:77] + "..."
+    return title
 
 
 def estimate(prompt, agent_output, check_output, cwd, yolo, flags, previous_total):
@@ -374,6 +392,7 @@ class Task:
         self._progress_bar = None
         self._progress_total = None
         self._progress_start = None
+        self._pushover = Pushover()
         self.agent = Agent(
             cwd,
             yolo,
@@ -414,6 +433,14 @@ class Task:
 
     def on_failure(self, result):
         """Hook called after a failed run, e.g. log the failure reason."""
+
+    def notify_pushover(self, result):
+        """Send a Pushover notification for this task result."""
+        message = _format_task_message(result)
+        if not message:
+            return
+        title = _format_task_title(self.prompt)
+        self._pushover.send(title, message)
 
     def on_progress(
         self,
@@ -463,6 +490,7 @@ class Task:
             If debug is True, log debug messages.
             If progress is True, show a tqdm progress bar with status updates.
         """
+        self._pushover.ensure_ready()
         try:
             # If this fails in the middle we will still try to tear down
             self.set_up()
@@ -555,6 +583,7 @@ class Task:
                         self.agent.thread_id,
                     )
                     self.on_success(result)
+                    self.notify_pushover(result)
                     return result
                 if self.max_iterations and iteration >= self.max_iterations:
                     summary = self.agent(self.failure_prompt(error))
@@ -568,6 +597,7 @@ class Task:
                         self.agent.thread_id,
                     )
                     self.on_failure(result)
+                    self.notify_pushover(result)
                     return result
                 output = self.agent(self.fix_prompt(error))
                 self.last_output = output
