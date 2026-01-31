@@ -8,6 +8,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .rate_limits import quota_line
+
 _PUSHOVER_PATH = "~/.pushover"
 _PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 _MAX_MESSAGE = 1024
@@ -58,6 +60,7 @@ class Pushover:
         message_text = (message or "").strip()
         if not message_text:
             return False
+        message_text = _append_quota_line(message_text)
         message_text = _truncate(message_text, _MAX_MESSAGE)
         payload = urllib.parse.urlencode(
             {
@@ -177,3 +180,10 @@ def _truncate(text, limit):
 
 def _warn(message):
     print(message, file=sys.stderr)
+
+
+def _append_quota_line(message):
+    line = quota_line()
+    if not line:
+        return message
+    return f"{message}\n{line}"

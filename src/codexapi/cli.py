@@ -18,6 +18,7 @@ from .ralph import Ralph, cancel_ralph_loop
 from .science import Science
 from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
 from .taskfile import TaskFile, load_task_file, task_def_uses_item
+from .rate_limits import quota_line
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -1298,6 +1299,10 @@ def main(argv=None):
         "top",
         help="Show running Codex sessions.",
     )
+    subparsers.add_parser(
+        "limit",
+        help="Show Codex rate limits.",
+    )
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -1317,6 +1322,9 @@ def main(argv=None):
         return
     if args.command == "top":
         _run_top([])
+        return
+    if args.command == "limit":
+        print(quota_line())
         return
 
     if args.command == "foreach":
