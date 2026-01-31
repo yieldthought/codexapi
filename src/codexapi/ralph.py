@@ -54,6 +54,9 @@ class Ralph:
     def hook_after_loop(self, last_message, stop_reason):
         """Hook called after the loop exits."""
 
+    def hook_new_best(self, result):
+        """Hook called when a new best result is detected."""
+
     def build_prompt(self, iteration):
         """Return the prompt for this iteration."""
         return self.prompt
