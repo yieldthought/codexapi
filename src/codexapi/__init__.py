@@ -1,6 +1,6 @@
 """Minimal Python API for running the Codex CLI."""
 
-from .agent import Agent, agent
+from .agent import Agent, WelfareStop, agent
 from .foreach import ForeachResult, foreach
 from .pushover import Pushover
 from .rate_limits import quota_line, rate_limits
@@ -19,9 +19,10 @@ __all__ = [
     "Task",
     "TaskFailed",
     "TaskResult",
+    "WelfareStop",
     "agent",
     "foreach",
     "task",
     "task_result",
 ]
-__version__ = "0.6.1"
+__version__ = "0.6.2"

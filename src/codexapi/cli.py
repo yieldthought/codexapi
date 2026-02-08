@@ -1002,6 +1002,8 @@ def main(argv=None):
         "  Completion promise: output <promise>TEXT</promise> where TEXT matches\n"
         "  --completion-promise after trimming/collapsing whitespace. CRITICAL RULE:\n"
         "  Only output the promise when it is completely and unequivocally TRUE.\n"
+        "  Welfare stop: the agent may stop early by outputting MAKE IT STOP as the\n"
+        "  first non-empty line of its message.\n"
         "  Cancel by deleting .codexapi/ralph-loop.local.md or running codexapi ralph --cancel.\n"
         "  Default starts each iteration with a fresh Agent context; use --ralph-reuse\n"
         "  to reuse a single Codex thread across iterations.\n"

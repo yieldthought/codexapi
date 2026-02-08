@@ -5,6 +5,8 @@ import os
 import shlex
 import subprocess
 
+from . import welfare
+
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 
 
@@ -24,6 +26,15 @@ def agent(prompt, cwd=None, yolo=True, flags=None):
     return message
 
 
+class WelfareStop(RuntimeError):
+    """Raised when an agent requests an early stop via the welfare sentinel."""
+
+    def __init__(self, agent_message):
+        super().__init__("Agent requested stop via welfare sentinel.")
+        self.agent_message = agent_message
+        self.note = welfare.stop_note(agent_message)
+
+
 class Agent:
     """Stateful Codex session wrapper that resumes the same conversation.
 
@@ -39,6 +50,7 @@ class Agent:
         yolo=True,
         thread_id=None,
         flags=None,
+        welfare=False,
     ):
         """Create a new session wrapper.
 
@@ -48,14 +60,19 @@ class Agent:
             agent: Agent backend to use (only "codex" is supported).
             trace_id: Optional Codex thread id to resume from the first call.
             flags: Additional raw CLI flags to pass to Codex.
+            welfare: When true, append welfare stop instructions to each prompt
+                and raise WelfareStop if the agent outputs MAKE IT STOP.
         """
         self.cwd = cwd
         self._yolo = yolo
         self._flags = flags
+        self._welfare = welfare
         self.thread_id = thread_id
 
     def __call__(self, prompt):
         """Send a prompt to Codex and return only the agent's message."""
+        if self._welfare:
+            prompt = welfare.append_instructions(prompt)
         message, thread_id = _run_codex(
             prompt,
             self.cwd,
@@ -65,6 +82,8 @@ class Agent:
         )
         if thread_id:
             self.thread_id = thread_id
+        if self._welfare and welfare.stop_requested(message):
+            raise WelfareStop(message)
         return message
 
 

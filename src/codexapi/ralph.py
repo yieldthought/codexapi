@@ -5,7 +5,7 @@ import re
 import sys
 from datetime import datetime, timezone
 
-from .agent import Agent
+from .agent import Agent, WelfareStop
 
 _STATE_DIR = ".codexapi"
 _STATE_FILE = "ralph-loop.local.md"
@@ -102,7 +102,7 @@ class Ralph:
                     "The loop will resend the SAME PROMPT each iteration.",
                     "Cancel by deleting .codexapi/ralph-loop.local.md or running",
                     "codexapi ralph --cancel.",
-                    "No manual stop beyond max iterations or completion promise.",
+                    "Welfare stop: agent may output MAKE IT STOP (first non-empty line).",
                     "",
                     "To monitor: head -10 .codexapi/ralph-loop.local.md",
                     "",
@@ -126,6 +126,7 @@ class Ralph:
                         "  - The statement MUST be completely and unequivocally TRUE",
                         "  - Do NOT output false statements to exit the loop",
                         "  - Do NOT lie even if you think you should exit",
+                        "  - If you need to stop early, use MAKE IT STOP (do not lie with the promise)",
                         "",
                         "CRITICAL RULE: If a completion promise is set, you may ONLY",
                         "output it when the statement is completely and unequivocally",
@@ -155,21 +156,31 @@ class Ralph:
                 self.hook_before_iteration(iteration)
 
                 if self.fresh:
-                    runner = Agent(self.cwd, self.yolo, None, self.flags)
+                    runner = Agent(self.cwd, self.yolo, None, self.flags, welfare=True)
                 elif runner is None:
-                    runner = Agent(self.cwd, self.yolo, None, self.flags)
+                    runner = Agent(self.cwd, self.yolo, None, self.flags, welfare=True)
 
                 prompt = self.build_prompt(iteration)
-                message = runner(
-                    prompt
-                    + "\nIf there are multiple paths forward, you MUST use your "
-                    "own best judgement as to which to try first! Do not ask the "
-                    "user to choose an option, they hereby give you explciit "
-                    "permission to pick the best one yourself.\n"
-                )
+                stopped = False
+                try:
+                    message = runner(
+                        prompt
+                        + "\nIf there are multiple paths forward, you MUST use your "
+                        "own best judgement as to which to try first! Do not ask the "
+                        "user to choose an option, they hereby give you explciit "
+                        "permission to pick the best one yourself.\n"
+                    )
+                except WelfareStop as exc:
+                    stopped = True
+                    message = exc.agent_message
                 print(message)
                 last_message = message
                 self.hook_after_iteration(iteration, message)
+
+                if stopped:
+                    stop_reason = "welfare_stop"
+                    print("Ralph loop stopped: Welfare stop requested (MAKE IT STOP).")
+                    return message
 
                 if not os.path.exists(state_path):
                     state_missing = True
@@ -360,12 +371,14 @@ def _status_line(iteration, completion_promise):
     if completion_promise is None:
         return (
             f"Ralph iteration {iteration} | "
-            "No completion promise set - loop runs infinitely"
+            "No completion promise set - loop runs infinitely "
+            "| Welfare stop: MAKE IT STOP"
         )
     return (
         f"Ralph iteration {iteration} | To stop: output "
         f"<promise>{completion_promise}</promise> "
-        "(ONLY when statement is TRUE - do not lie to exit!)"
+        "(ONLY when statement is TRUE - do not lie to exit!) "
+        "| Welfare stop: MAKE IT STOP"
     )
 
 

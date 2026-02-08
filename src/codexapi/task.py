@@ -4,7 +4,7 @@ import json
 import logging
 import time
 
-from .agent import Agent, agent
+from .agent import Agent, WelfareStop, agent
 from .pushover import Pushover
 from tqdm import tqdm
 
@@ -398,6 +398,7 @@ class Task:
             yolo,
             thread_id,
             flags,
+            welfare=True,
         )
 
     def set_up(self):
@@ -491,6 +492,7 @@ class Task:
             If progress is True, show a tqdm progress bar with status updates.
         """
         self._pushover.ensure_ready()
+        iteration = 0
         try:
             # If this fails in the middle we will still try to tear down
             self.set_up()
@@ -529,7 +531,6 @@ class Task:
 
             # Try correcting it up to max_iterations times
             error = None
-            iteration = 0
             while True:
                 iteration += 1
                 error = self.check(self.last_output)
@@ -603,6 +604,19 @@ class Task:
                 self.last_output = output
                 if debug:
                     _logger.debug("Fix output: %s", output)
+        except WelfareStop as exc:
+            note = exc.note or ""
+            summary = note.strip() or "Agent requested early stop (MAKE IT STOP)."
+            result = TaskResult(
+                False,
+                summary,
+                iteration,
+                "Welfare stop requested (MAKE IT STOP).",
+                self.agent.thread_id,
+            )
+            self.on_failure(result)
+            self.notify_pushover(result)
+            return result
         finally:
             # No matter what, once we have set_up we will always tear_down
             self.tear_down()

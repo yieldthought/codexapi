@@ -116,6 +116,8 @@ iteration cap is hit (0 means unlimited). Cancel by deleting
 `.codexapi/ralph-loop.local.md` or running `codexapi ralph --cancel`.
 By default each iteration starts with a fresh Agent context; use
 `--ralph-reuse` to keep a single shared context across iterations.
+The agent may also stop early by outputting `MAKE IT STOP` as the first
+non-empty line of its message.
 
 ```bash
 codexapi ralph "Fix the bug." --completion-promise DONE --max-iterations 5
@@ -160,7 +162,7 @@ items are filtered out.
 - `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
 
-### `Agent(cwd=None, yolo=True, thread_id=None, flags=None)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -169,6 +171,8 @@ the same conversation and returns only the agent's message.
 - `thread_id -> str | None`: expose the underlying session id once created.
 - `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
+- `welfare` (bool): when true, append welfare stop instructions to each prompt
+  and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
 
 ### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 
