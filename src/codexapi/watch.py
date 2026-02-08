@@ -13,6 +13,13 @@ from datetime import datetime
 from .agent import Agent
 from .pushover import Pushover
 
+_WELCOME_PROMPT = (
+    "Welcome! Today you are running in an autonomous loop that will enable you to return to a long-running task "
+    "or system at regular intervals to perform tasks or move towards goals defined by the user's instructions below. "
+    "Please follow the instructions completely before responding to the user. Each time you respond to the user, the "
+    "system will wait for {minutes} minutes and will then wake you up to check for any changes or progress and continue "
+    "your work. Every reply must be JSON in the specific format described at the end of this message."
+)
 _JSON_INSTRUCTIONS = (
     "Respond with JSON only (no markdown/backticks/extra text).\n"
     "Return a single JSON object with keys:\n"
@@ -60,7 +67,7 @@ def watch(minutes, prompt, cwd=None, yolo=True, flags=None):
         last_sent = sent_at
 
         now = datetime.now().astimezone().isoformat(timespec="seconds")
-        message = _build_tick_prompt(prompt, now, elapsed, tick)
+        message = _build_tick_prompt(prompt, now, elapsed, tick, minutes)
         output = session(message)
         try:
             result = _parse_status(output)
@@ -98,11 +105,23 @@ def watch(minutes, prompt, cwd=None, yolo=True, flags=None):
             time.sleep(sleep_seconds)
 
 
-def _build_tick_prompt(prompt, now, elapsed, tick):
-    lines = [
-        f"Tick {tick}.",
-        f"Local time now: {now}",
-    ]
+def _build_tick_prompt(prompt, now, elapsed, tick, minutes):
+    lines = []
+
+    if tick == 1:
+        lines.extend(
+            [
+                _WELCOME_PROMPT.format(minutes=minutes),
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            f"Tick {tick}.",
+            f"Local time now: {now}",
+        ]
+    )
     if elapsed is not None:
         lines.append(
             "Time since last tick: "
@@ -169,9 +188,8 @@ def _json_retry_prompt(prompt, tick, error, output):
         snippet,
         "",
         "Please try again and respond with JSON only.",
-        "",
-        "A reminder: your instructions are:",
-        prompt.strip(),
+        "Return a fresh status update in the required JSON format.",
+        "If you want to ask the user a question, put it in comments.",
         "",
         _JSON_INSTRUCTIONS,
     ]
