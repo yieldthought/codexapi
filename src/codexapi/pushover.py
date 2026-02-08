@@ -15,7 +15,7 @@ _PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 _MAX_MESSAGE = 1024
 
 _STARTUP_MESSAGE = (
-    "Pushover user and app keys read, notifications for task and science enabled."
+    "Pushover user and app keys read, notifications for task/science/watch enabled."
 )
 
 

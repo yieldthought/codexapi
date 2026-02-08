@@ -6,17 +6,19 @@ small JSON status payload so the loop can decide whether to continue.
 """
 
 import json
+import sys
 import time
 from datetime import datetime
 
 from .agent import Agent
+from .pushover import Pushover
 
 _JSON_INSTRUCTIONS = (
     "Respond with JSON only (no markdown/backticks/extra text).\n"
     "Return a single JSON object with keys:\n"
     "  status: string (one line)\n"
     "  continue: boolean\n"
-    "  comments: string\n"
+    "  comments: string (optional)\n"
     "To stop this watch loop, set continue to false."
 )
 
@@ -43,6 +45,9 @@ def watch(minutes, prompt, cwd=None, yolo=True, flags=None):
 
     interval = minutes * 60
     session = Agent(cwd, yolo, None, flags)
+    pushover = Pushover()
+    pushover.ensure_ready()
+    title = _format_title(prompt)
 
     last_sent = None
     last_result = None
@@ -57,11 +62,34 @@ def watch(minutes, prompt, cwd=None, yolo=True, flags=None):
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         message = _build_tick_prompt(prompt, now, elapsed, tick)
         output = session(message)
-        result = _parse_status(output)
+        try:
+            result = _parse_status(output)
+        except ValueError as exc:
+            print(
+                f"[watch {tick} {now}] Invalid JSON from agent, requesting retry: {exc}",
+                file=sys.stderr,
+            )
+            retry_prompt = _json_retry_prompt(prompt, tick, str(exc), output)
+            retry_output = session(retry_prompt)
+            try:
+                result = _parse_status(retry_output)
+            except ValueError as exc2:
+                details = _format_json_double_failure(
+                    str(exc),
+                    output,
+                    str(exc2),
+                    retry_output,
+                )
+                pushover.send(title, f"Watch stopped (invalid JSON).\n{details}")
+                raise RuntimeError(
+                    "Agent was unable to provide valid JSON output after retry.\n"
+                    + details
+                ) from None
         last_result = result
         _print_status(now, elapsed, tick, result)
 
         if not result["continue"]:
+            pushover.send(title, _format_stop_message(tick, now, result))
             return last_result
 
         next_tick = sent_at + interval
@@ -131,6 +159,78 @@ def _parse_status(output):
     }
 
 
+def _json_retry_prompt(prompt, tick, error, output):
+    snippet = _snippet(output, 600)
+    lines = [
+        f"Your last message (tick {tick}) was not valid JSON.",
+        f"Error: {error}",
+        "",
+        "Here is your previous output (truncated):",
+        snippet,
+        "",
+        "Please try again and respond with JSON only.",
+        "",
+        "A reminder: your instructions are:",
+        prompt.strip(),
+        "",
+        _JSON_INSTRUCTIONS,
+    ]
+    return "\n".join(lines).strip()
+
+
+def _format_title(prompt):
+    text = _single_line(prompt).strip() or "codexapi watch"
+    if len(text) > 60:
+        text = text[:57] + "..."
+    return f"Watch: {text}"
+
+
+def _format_stop_message(tick, now, result):
+    status = _single_line(result.get("status") or "").strip()
+    header = f"Watch stopped at tick {tick} ({now})."
+    if status:
+        header = f"{header} {status}"
+    comments = (result.get("comments") or "").strip()
+    if comments:
+        return f"{header}\n{comments}"
+    return header
+
+
+def _format_json_failure(error, output):
+    snippet = _snippet(output, 600)
+    return "\n".join(
+        [
+            f"Error: {error}",
+            "",
+            "Last output (truncated):",
+            snippet,
+        ]
+    ).strip()
+
+
+def _format_json_double_failure(error_1, output_1, error_2, output_2):
+    first = _format_json_failure(error_1, output_1)
+    second = _format_json_failure(error_2, output_2)
+    return "\n".join(
+        [
+            "First attempt:",
+            first,
+            "",
+            "Second attempt:",
+            second,
+        ]
+    ).strip()
+
+
+def _snippet(text, limit):
+    text = str(text or "").strip()
+    if not text:
+        return "(empty)"
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _maybe_strip_code_fence(text):
     if not text.startswith("```"):
         return text
@@ -177,4 +277,3 @@ def _print_status(now, elapsed, tick, result):
     comments = result.get("comments") or ""
     if comments.strip():
         print(comments.rstrip())
-

@@ -27,4 +27,4 @@ __all__ = [
     "task_result",
     "watch",
 ]
-__version__ = "0.6.3"
+__version__ = "0.6.4"

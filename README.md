@@ -113,7 +113,11 @@ Use `--no-yolo` to run Codex with `--full-auto` instead.
 
 Watch mode periodically ticks a long-running agent session with the current time
 and prints JSON status updates. The agent controls the loop by setting
-`continue` to true/false in its JSON response.
+`continue` to true/false in its JSON response. Each tick expects JSON keys:
+`status` (one line), `continue` (bool), and optional `comments` (string). If the
+JSON is invalid, watch asks the agent once to retry before stopping with an
+error. When `~/.pushover` is configured, watch sends a notification when it
+stops.
 
 ```bash
 codexapi watch 5 "Run the benchmark and wait for results."
@@ -147,7 +151,8 @@ Optional Pushover notifications: create `~/.pushover` with two non-empty lines.
 Line 1 is your user or group key, line 2 is the app API token. When this file
 exists, Science will send a notification whenever it detects a new best result,
 including the metric values and percent improvement. Task runs will also send a
-✅/❌ notification with the task summary.
+✅/❌ notification with the task summary. Watch runs send a notification when the
+loop stops.
 
 Run a task file across a list file:
 
@@ -186,8 +191,9 @@ the same conversation and returns only the agent's message.
 
 Runs a long-lived agent session and periodically "ticks" it with the current
 local time and a reminder of `prompt`. Each tick expects JSON with keys:
-`status` (one line), `continue` (bool), and `comments` (string). The loop stops
-when `continue` is false.
+`status` (one line), `continue` (bool), and optional `comments` (string). If the
+JSON is invalid, watch asks the agent once to retry. The loop stops when
+`continue` is false and sends a Pushover notification (when configured).
 
 ### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 

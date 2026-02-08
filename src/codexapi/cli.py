@@ -1543,6 +1543,8 @@ def main(argv=None):
             watch(args.minutes, prompt, args.cwd, args.yolo, args.flags)
         except KeyboardInterrupt:
             raise SystemExit(130)
+        except Exception as exc:
+            raise SystemExit(str(exc) or "watch failed") from None
         return
     if args.command == "task":
         if args.project:
