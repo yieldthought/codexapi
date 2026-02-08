@@ -19,6 +19,7 @@ from .science import Science
 from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
 from .taskfile import TaskFile, load_task_file, task_def_uses_item
 from .rate_limits import quota_line
+from .watch import watch
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -1039,6 +1040,32 @@ def main(argv=None):
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
+
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="Periodically tick an agent for long-running work.",
+    )
+    watch_parser.add_argument(
+        "minutes",
+        type=int,
+        help="Tick interval in minutes (integer, >= 1).",
+    )
+    watch_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Prompt to send. Use '-' or omit to read from stdin.",
+    )
+    watch_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    watch_parser.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo and use --full-auto.",
+    )
+    watch_parser.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+    )
     run_parser.add_argument(
         "--thread-id",
         help="Resume an existing Codex thread id.",
@@ -1474,7 +1501,7 @@ def main(argv=None):
 
     prompt_source = None
     prompt = None
-    if args.command in ("run", "ralph"):
+    if args.command in ("run", "ralph", "watch"):
         prompt_source = args.prompt
     elif args.command == "science":
         prompt_source = args.task
@@ -1508,6 +1535,14 @@ def main(argv=None):
             args.completion_promise,
             args.ralph_fresh,
         )()
+        return
+    if args.command == "watch":
+        if args.minutes < 1:
+            raise SystemExit("watch minutes must be >= 1.")
+        try:
+            watch(args.minutes, prompt, args.cwd, args.yolo, args.flags)
+        except KeyboardInterrupt:
+            raise SystemExit(130)
         return
     if args.command == "task":
         if args.project:

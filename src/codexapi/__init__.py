@@ -7,6 +7,7 @@ from .rate_limits import quota_line, rate_limits
 from .ralph import Ralph
 from .science import Science
 from .task import Task, TaskFailed, TaskResult, task, task_result
+from .watch import watch
 
 __all__ = [
     "Agent",
@@ -24,5 +25,6 @@ __all__ = [
     "foreach",
     "task",
     "task_result",
+    "watch",
 ]
-__version__ = "0.6.2"
+__version__ = "0.6.3"

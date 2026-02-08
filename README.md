@@ -111,6 +111,14 @@ codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off
 
 Use `--no-yolo` to run Codex with `--full-auto` instead.
 
+Watch mode periodically ticks a long-running agent session with the current time
+and prints JSON status updates. The agent controls the loop by setting
+`continue` to true/false in its JSON response.
+
+```bash
+codexapi watch 5 "Run the benchmark and wait for results."
+```
+
 Ralph loop mode repeats the same prompt until a completion promise or a max
 iteration cap is hit (0 means unlimited). Cancel by deleting
 `.codexapi/ralph-loop.local.md` or running `codexapi ralph --cancel`.
@@ -173,6 +181,13 @@ the same conversation and returns only the agent's message.
 - `flags` (str | None): extra CLI flags to pass to Codex.
 - `welfare` (bool): when true, append welfare stop instructions to each prompt
   and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
+
+### `watch(minutes, prompt, cwd=None, yolo=True, flags=None) -> dict`
+
+Runs a long-lived agent session and periodically "ticks" it with the current
+local time and a reminder of `prompt`. Each tick expects JSON with keys:
+`status` (one line), `continue` (bool), and `comments` (string). The loop stops
+when `continue` is false.
 
 ### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 
