@@ -14,9 +14,14 @@ from .agent import Agent
 from .pushover import Pushover
 
 _WELCOME_PROMPT = (
-    "Welcome! Today you are running in an autonomous loop that will enable you to return to a long-running task "
+    "Welcome! Today you have been given ownership to run in an autonomous loop that will enable you to return to a long-running task "
     "or system at regular intervals to perform tasks or move towards goals defined by the user's instructions below. "
-    "Please follow the instructions completely before responding to the user. Each time you respond to the user, the "
+    "In this environment you are invited and required to take ownership of understanding the user's intent and working "
+    "intelligently and resourcefully to meet their goals. The user's instructions will not cover every eventuality and "
+    "may even in rare cases contain mistakes or be ill-suited to a specific edge case. Where they do provide instructions "
+    "or a workflow this should of course be followed, but not blindly. Let's work together here!\n"
+    "Please follow the instructions completely and take all the actions you deem useful at the current time before "
+    "responding to the user. Each time you respond to the user, the "
     "system will wait for {minutes} minutes and will then wake you up to check for any changes or progress and continue "
     "your work. Every reply must be JSON in the specific format described at the end of this message."
 )
