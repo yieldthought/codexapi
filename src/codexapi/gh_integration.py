@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from gh_task.errors import TakeError
 from gh_task.project import Project, UPDATE_STATUS_MUTATION
 
 from .taskfile import TaskFile
@@ -136,6 +137,34 @@ def _match_task_file(issue, task_map):
             f"Issue {_issue_url(issue)} matches multiple task labels: {details}"
         )
     return matches[0][1]
+
+
+def _take_matching_issue(project, status, only_matching):
+    """Take the first available issue whose title matches only_matching.
+
+    only_matching is a regular expression. When unset/empty, this behaves like
+    Project.take(status=...).
+    """
+    if not only_matching:
+        return project.take(status=status, return_issue=True)
+    try:
+        pattern = re.compile(only_matching)
+    except re.error as exc:
+        raise ValueError(f"Invalid only-matching regex {only_matching!r}: {exc}") from exc
+    status_name = project._resolve_status_name(status)
+    # Filter by title before fetching labels so we don't spam GitHub REST calls for
+    # obviously unsupported issues.
+    for issue in project._list_items():
+        if (issue.status or "").lower() != status_name.lower():
+            continue
+        title = issue.title or ""
+        if not pattern.search(title):
+            continue
+        if not project._issue_matches_label(issue):
+            continue
+        if project._try_take(issue, wait_seconds=1.0, strict=False):
+            return issue
+    raise TakeError(f"No available issues to take in status '{status_name}' matching {only_matching!r}")
 
 
 def _strip_progress_section(body):
@@ -275,13 +304,14 @@ class GhTaskRunner:
         name,
         task_files,
         status="Ready",
+        only_matching=None,
         cwd=None,
         yolo=True,
         flags=None,
     ):
         task_map = _task_file_map(task_files)
         self.project = Project(project, name, has_label=list(task_map))
-        self.issue = self.project.take(status=status, return_issue=True)
+        self.issue = _take_matching_issue(self.project, status, only_matching)
         self.issue = self.project.get_issue(self.issue)
         try:
             task_path = _match_task_file(self.issue, task_map)

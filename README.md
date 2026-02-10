@@ -79,6 +79,11 @@ Take tasks from a GitHub Project (requires `gh-task`):
 ```bash
 codexapi task -p owner/projects/3 -n "Your Name" -s Ready task_a.yaml task_b.yaml
 ```
+Filter project issues by title before taking them:
+
+```bash
+codexapi task -p owner/projects/3 -n "Your Name" --only-matching "/n300/" task_a.yaml task_b.yaml
+```
 Reset owned tasks on a GitHub Project back to Ready:
 
 ```bash

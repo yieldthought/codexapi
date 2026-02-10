@@ -1107,6 +1107,13 @@ def main(argv=None):
         help="Owner label name for gh-task when using --project.",
     )
     task_parser.add_argument(
+        "--only-matching",
+        help=(
+            "When using --project, only take issues whose title matches this regex. "
+            "Useful for filtering tasks by hardware encoded in the issue title/path."
+        ),
+    )
+    task_parser.add_argument(
         "task_args",
         nargs="*",
         help="Prompt to send (no --project) or task files (with --project).",
@@ -1419,6 +1426,11 @@ def main(argv=None):
             raise SystemExit("--name is required with --project.")
         if not args.task_args:
             raise SystemExit("task --project requires one or more task files.")
+        if args.only_matching is not None:
+            try:
+                re.compile(args.only_matching)
+            except re.error as exc:
+                raise SystemExit(f"--only-matching regex is invalid: {exc}") from None
         from .gh_integration import GhTaskRunner, project_url
         from gh_task.errors import TakeError
 
@@ -1430,6 +1442,7 @@ def main(argv=None):
                         args.name,
                         args.task_args,
                         args.status,
+                        args.only_matching,
                         args.cwd,
                         args.yolo,
                         args.flags,
@@ -1457,6 +1470,7 @@ def main(argv=None):
                     args.name,
                     args.task_args,
                     args.status,
+                    args.only_matching,
                     args.cwd,
                     args.yolo,
                     args.flags,
@@ -1482,6 +1496,8 @@ def main(argv=None):
                 raise SystemExit(
                     "task -f --item requires {{item}} in the task file."
                 )
+        if args.only_matching is not None:
+            raise SystemExit("--only-matching is only supported with --project.")
         if args.check is not None:
             raise SystemExit("--check is not allowed with -f.")
         if args.max_iterations is not None:
@@ -1553,6 +1569,8 @@ def main(argv=None):
             raise SystemExit("--loop is only supported with -p.")
         if args.item is not None:
             raise SystemExit("--item is only supported with -f.")
+        if args.only_matching is not None:
+            raise SystemExit("--only-matching is only supported with --project.")
         if args.max_iterations is None:
             args.max_iterations = DEFAULT_MAX_ITERATIONS
         if args.max_iterations < 0:
