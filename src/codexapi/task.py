@@ -486,6 +486,27 @@ class Task:
         """Ask the agent to summarize remaining issues after retries."""
         return _failure_prompt(error)
 
+    def _estimate_progress(self, agent_output, check_output):
+        """Run a progress estimate and return parsed data or an error string."""
+        try:
+            return (
+                estimate(
+                    self.prompt,
+                    agent_output or "",
+                    check_output or "",
+                    self.cwd,
+                    self._yolo,
+                    self._flags,
+                    self._progress_total,
+                ),
+                None,
+            )
+        except Exception as exc:
+            error = _single_line(str(exc))
+            if not error:
+                error = exc.__class__.__name__
+            return None, error
+
     def __call__(self, debug=False, progress=False):
         """Run the task with checker-driven retries.
             If debug is True, log debug messages.
@@ -499,29 +520,24 @@ class Task:
 
             progress_updates = progress or self._progress_updates
             self._progress_enabled = progress
+            start_time = time.monotonic()
+            self._progress_start = start_time
             if progress_updates:
-                remaining, _summary = estimate(
-                    self.prompt,
-                    "",
-                    "",
-                    self.cwd,
-                    self._yolo,
-                    self._flags,
-                    None,
-                )
-                self._progress_total = remaining
-                start_time = time.monotonic()
-                self._progress_start = start_time
-                self.on_progress(
-                    0,
-                    self.max_iterations,
-                    self._progress_total,
-                    remaining,
-                    None,
-                )
-            else:
-                start_time = time.monotonic()
-                self._progress_start = start_time
+                estimate_result, estimate_error = self._estimate_progress("", "")
+                if estimate_result is not None:
+                    remaining, _summary = estimate_result
+                    self._progress_total = remaining
+                    self.on_progress(
+                        0,
+                        self.max_iterations,
+                        self._progress_total,
+                        remaining,
+                        None,
+                    )
+                elif debug:
+                    _logger.debug(
+                        "Skipping initial progress update: %s", estimate_error
+                    )
 
             # Start with the initial prompt
             output = self.agent(self.prompt)
@@ -541,37 +557,52 @@ class Task:
                     check_output = self.last_check_output
                     if self.check_skipped:
                         check_output = "Verification skipped."
-                    remaining, summary = estimate(
-                        self.prompt,
+                    progress_data = None
+                    estimate_result, estimate_error = self._estimate_progress(
                         self.last_output or "",
                         check_output or "",
-                        self.cwd,
-                        self._yolo,
-                        self._flags,
-                        self._progress_total,
                     )
-                    total_estimate = self._progress_total
-                    if total_estimate is None or remaining > total_estimate:
-                        total_estimate = remaining
-                    self._progress_total = total_estimate
-                    elapsed = _format_elapsed(time.monotonic() - start_time)
-                    status_prefix = (
-                        f"[{_format_turns(iteration, self.max_iterations)} @ {elapsed}]"
-                    )
-                    is_final = not error or (
-                        self.max_iterations and iteration >= self.max_iterations
-                    )
-                    if is_final:
-                        marker = "✅" if not error else "❌"
-                        summary = f"{marker} {summary}".strip()
-                    status_line = f"{status_prefix}: {summary}".rstrip()
-                    self.on_progress(
-                        iteration,
-                        self.max_iterations,
-                        total_estimate,
-                        remaining,
-                        status_line,
-                    )
+                    if estimate_result is not None:
+                        remaining, summary = estimate_result
+                        total_estimate = self._progress_total
+                        if total_estimate is None or remaining > total_estimate:
+                            total_estimate = remaining
+                        self._progress_total = total_estimate
+                        progress_data = (total_estimate, remaining, summary)
+                    else:
+                        total_estimate = self._progress_total
+                        if total_estimate is None:
+                            if debug:
+                                _logger.debug(
+                                    "Skipping progress update: %s", estimate_error
+                                )
+                        else:
+                            summary = f"Progress estimate unavailable: {estimate_error}"
+                            progress_data = (
+                                total_estimate,
+                                total_estimate,
+                                summary,
+                            )
+                    if progress_data is not None:
+                        total_estimate, remaining, summary = progress_data
+                        elapsed = _format_elapsed(time.monotonic() - start_time)
+                        status_prefix = (
+                            f"[{_format_turns(iteration, self.max_iterations)} @ {elapsed}]"
+                        )
+                        is_final = not error or (
+                            self.max_iterations and iteration >= self.max_iterations
+                        )
+                        if is_final:
+                            marker = "✅" if not error else "❌"
+                            summary = f"{marker} {summary}".strip()
+                        status_line = f"{status_prefix}: {summary}".rstrip()
+                        self.on_progress(
+                            iteration,
+                            self.max_iterations,
+                            total_estimate,
+                            remaining,
+                            status_line,
+                        )
                 if not error:
                     summary = self.agent(self.success_prompt())
                     if debug:
