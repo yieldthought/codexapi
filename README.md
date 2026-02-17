@@ -134,6 +134,12 @@ If the leadbook does not exist, lead creates it with a template.
 
 ```bash
 codexapi lead 5 "Run the benchmark and wait for results."
+
+Run without waiting between check-ins:
+
+```bash
+codexapi lead 0 "Do a rapid triage pass and report."
+```
 ```
 
 Ralph loop mode repeats the same prompt until a completion promise or a max

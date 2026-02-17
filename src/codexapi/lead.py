@@ -72,7 +72,7 @@ def lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None):
     """Run a periodic lead loop.
 
     Args:
-        minutes: Check-in interval in whole minutes (>= 1).
+        minutes: Check-in interval in whole minutes (>= 0).
         prompt: The original instruction prompt.
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
@@ -84,8 +84,8 @@ def lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None):
     """
     if not isinstance(minutes, int):
         raise TypeError("minutes must be an integer")
-    if minutes < 1:
-        raise ValueError("minutes must be >= 1")
+    if minutes < 0:
+        raise ValueError("minutes must be >= 0")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
 
@@ -182,10 +182,11 @@ def lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None):
             pushover.send(title, _format_stop_message(tick, now, result))
             return last_result
 
-        next_tick = sent_at + interval
-        sleep_seconds = next_tick - time.monotonic()
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+        if interval > 0:
+            next_tick = sent_at + interval
+            sleep_seconds = next_tick - time.monotonic()
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
 
 
 def _build_tick_prompt(prompt, now, elapsed, tick, minutes, leadbook_path, leadbook):

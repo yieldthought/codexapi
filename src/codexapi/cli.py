@@ -1061,7 +1061,7 @@ def main(argv=None):
     lead_parser.add_argument(
         "minutes",
         type=int,
-        help="Check-in interval in minutes (integer, >= 1).",
+        help="Check-in interval in minutes (integer, >= 0).",
     )
     lead_parser.add_argument(
         "prompt",
@@ -1585,8 +1585,8 @@ def main(argv=None):
         )()
         return
     if args.command == "lead":
-        if args.minutes < 1:
-            raise SystemExit("lead minutes must be >= 1.")
+        if args.minutes < 0:
+            raise SystemExit("lead minutes must be >= 0.")
         try:
             if args.no_leadbook and args.leadbook:
                 raise SystemExit("--leadbook and --no-leadbook are mutually exclusive.")
