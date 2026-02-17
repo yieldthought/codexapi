@@ -16,7 +16,8 @@ echo $! > "$state/worker.pid"
 
 echo "Worker pid: $(cat "$state/worker.pid")"
 
-cat <<EOF2
+if [[ -z "${LEAD_EXAMPLE_QUIET:-}" ]]; then
+  cat <<EOF2
 
 Example is running.
 - Logs: $state/worker.log
@@ -28,3 +29,4 @@ Run the lead loop in another terminal:
   codexapi lead 1 -f prompt.txt
 
 EOF2
+fi

@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-"$root/start_worker.sh"
+LEAD_EXAMPLE_QUIET=1 "$root/start_worker.sh"
 
 echo "Starting codexapi lead..."
 cd "$root"

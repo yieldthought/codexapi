@@ -6,3 +6,7 @@ dist/
 .venv/
 .env
 .DS_Store
+
+# Lead example artifacts
+examples/lead/state/
+examples/lead/LEADBOOK.md
