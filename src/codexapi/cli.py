@@ -19,7 +19,7 @@ from .science import Science
 from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
 from .taskfile import TaskFile, load_task_file, task_def_uses_item
 from .rate_limits import quota_line
-from .watch import watch
+from .lead import lead
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -89,6 +89,19 @@ def _read_prompt(prompt):
     data = sys.stdin.read()
     if not data.strip():
         raise SystemExit("No prompt provided. Pass a prompt or pipe via stdin.")
+    return data
+
+
+def _read_prompt_file(path):
+    if not path or not str(path).strip():
+        raise SystemExit("Prompt file path is empty.")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = handle.read()
+    except FileNotFoundError:
+        raise SystemExit(f"Prompt file not found: {path}") from None
+    if not data.strip():
+        raise SystemExit(f"Prompt file is empty: {path}")
     return data
 
 
@@ -1041,28 +1054,42 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
 
-    watch_parser = subparsers.add_parser(
-        "watch",
-        help="Periodically tick an agent for long-running work.",
+    lead_parser = subparsers.add_parser(
+        "lead",
+        help="Periodically check in to lead long-running work.",
     )
-    watch_parser.add_argument(
+    lead_parser.add_argument(
         "minutes",
         type=int,
-        help="Tick interval in minutes (integer, >= 1).",
+        help="Check-in interval in minutes (integer, >= 1).",
     )
-    watch_parser.add_argument(
+    lead_parser.add_argument(
         "prompt",
         nargs="?",
         help="Prompt to send. Use '-' or omit to read from stdin.",
     )
-    watch_parser.add_argument("--cwd", help="Working directory for the Codex session.")
-    watch_parser.add_argument(
+    lead_parser.add_argument(
+        "-f",
+        "--prompt-file",
+        help="Read the lead prompt from a file.",
+    )
+    lead_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    lead_parser.add_argument(
+        "--leadbook",
+        help="Path to the leadbook file (default: LEADBOOK.md in cwd).",
+    )
+    lead_parser.add_argument(
+        "--no-leadbook",
+        action="store_true",
+        help="Disable leadbook injection and checks.",
+    )
+    lead_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
         help="Disable --yolo and use --full-auto.",
     )
-    watch_parser.add_argument(
+    lead_parser.add_argument(
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
@@ -1517,11 +1544,16 @@ def main(argv=None):
 
     prompt_source = None
     prompt = None
-    if args.command in ("run", "ralph", "watch"):
-        prompt_source = args.prompt
+    if args.command in ("run", "ralph", "lead"):
+        if args.command == "lead" and args.prompt_file:
+            if args.prompt is not None:
+                raise SystemExit("lead --prompt-file cannot be used with a prompt arg.")
+            prompt = _read_prompt_file(args.prompt_file)
+        else:
+            prompt_source = args.prompt
     elif args.command == "science":
         prompt_source = args.task
-    if args.command != "task":
+    if args.command != "task" and prompt is None:
         prompt = _read_prompt(prompt_source)
     exit_code = 0
     message = None
@@ -1552,15 +1584,18 @@ def main(argv=None):
             args.ralph_fresh,
         )()
         return
-    if args.command == "watch":
+    if args.command == "lead":
         if args.minutes < 1:
-            raise SystemExit("watch minutes must be >= 1.")
+            raise SystemExit("lead minutes must be >= 1.")
         try:
-            watch(args.minutes, prompt, args.cwd, args.yolo, args.flags)
+            if args.no_leadbook and args.leadbook:
+                raise SystemExit("--leadbook and --no-leadbook are mutually exclusive.")
+            leadbook = False if args.no_leadbook else args.leadbook
+            lead(args.minutes, prompt, args.cwd, args.yolo, args.flags, leadbook)
         except KeyboardInterrupt:
             raise SystemExit(130)
         except Exception as exc:
-            raise SystemExit(str(exc) or "watch failed") from None
+            raise SystemExit(str(exc) or "lead failed") from None
         return
     if args.command == "task":
         if args.project:

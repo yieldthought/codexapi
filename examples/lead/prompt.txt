@@ -1,0 +1,6 @@
+You are leading a tiny system from a control room.
+
+A worker was started by examples/lead/start_worker.sh. It should complete and write a done marker.
+Your job is to make that happen without editing the worker code unless absolutely necessary.
+
+Use the logs and state files in examples/lead/state to diagnose. Confirm completion.

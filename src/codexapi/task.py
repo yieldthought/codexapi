@@ -21,7 +21,7 @@ _CHECK_PREFIX = (
     "Return only JSON with keys: success (boolean) and reason (string).\n"
     "Set success to true only if everything matches the intent."
 )
-_CHECK_SUFFIX = "JSON only. No markdown or extra text."
+_CHECK_SUFFIX = "Return only JSON with keys: success (boolean) and reason (string)."
 _ESTIMATE_PROMPT = (
     "Estimate remaining work in story points for the task below.\n"
     "You may inspect the repo (read files, git status/diff), but do not run tests.\n"

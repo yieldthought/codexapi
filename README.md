@@ -116,16 +116,24 @@ codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off
 
 Use `--no-yolo` to run Codex with `--full-auto` instead.
 
-Watch mode periodically ticks a long-running agent session with the current time
-and prints JSON status updates. The agent controls the loop by setting
-`continue` to true/false in its JSON response. Each tick expects JSON keys:
+Lead mode periodically checks in on a long-running agent session with the
+current time and prints JSON status updates. The agent controls the loop by
+setting `continue` to true/false in its JSON response. Each check-in expects
+JSON keys:
 `status` (one line), `continue` (bool), and optional `comments` (string). If the
-JSON is invalid, watch asks the agent once to retry before stopping with an
-error. When `~/.pushover` is configured, watch sends a notification when it
+JSON is invalid, lead asks the agent once to retry before stopping with an
+error. When `~/.pushover` is configured, lead sends a notification when it
 stops.
 
+Lead mode also uses a leadbook file as the agent's working page. By default this
+is `LEADBOOK.md` in the working directory. The leadbook content is injected into
+each check-in prompt and must be updated before the agent responds. Use
+`--leadbook PATH` to point at a different file, or `--no-leadbook` to disable.
+Use `-f/--prompt-file` to read the prompt from a file.
+If the leadbook does not exist, lead creates it with a template.
+
 ```bash
-codexapi watch 5 "Run the benchmark and wait for results."
+codexapi lead 5 "Run the benchmark and wait for results."
 ```
 
 Ralph loop mode repeats the same prompt until a completion promise or a max
@@ -156,7 +164,7 @@ Optional Pushover notifications: create `~/.pushover` with two non-empty lines.
 Line 1 is your user or group key, line 2 is the app API token. When this file
 exists, Science will send a notification whenever it detects a new best result,
 including the metric values and percent improvement. Task runs will also send a
-✅/❌ notification with the task summary. Watch runs send a notification when the
+✅/❌ notification with the task summary. Lead runs send a notification when the
 loop stops.
 
 Run a task file across a list file:
@@ -192,13 +200,17 @@ the same conversation and returns only the agent's message.
 - `welfare` (bool): when true, append welfare stop instructions to each prompt
   and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
 
-### `watch(minutes, prompt, cwd=None, yolo=True, flags=None) -> dict`
+### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None) -> dict`
 
-Runs a long-lived agent session and periodically "ticks" it with the current
-local time and a reminder of `prompt`. Each tick expects JSON with keys:
+Runs a long-lived agent session and periodically checks in with the current
+local time and a reminder of `prompt`. Each check-in expects JSON with keys:
 `status` (one line), `continue` (bool), and optional `comments` (string). If the
-JSON is invalid, watch asks the agent once to retry. The loop stops when
+JSON is invalid, lead asks the agent once to retry. The loop stops when
 `continue` is false and sends a Pushover notification (when configured).
+
+Lead also injects the leadbook content into each prompt. By default it uses
+`LEADBOOK.md` in the working directory. Pass `leadbook=False` to disable or a
+path string to override the location.
 
 ### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
 
