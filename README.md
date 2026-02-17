@@ -115,6 +115,7 @@ codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off
 ```
 
 Use `--no-yolo` to run Codex with `--full-auto` instead.
+Use `--include-thinking` to return all agent messages joined together for `codexapi run`.
 
 Lead mode periodically checks in on a long-running agent session with the
 current time and prints JSON status updates. The agent controls the loop by
@@ -184,7 +185,7 @@ codexapi foreach list.txt task.yaml --retry-all
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=True, flags=None) -> str`
+### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False) -> str`
 
 Runs a single Codex turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -193,8 +194,9 @@ items are filtered out.
 - `cwd` (str | PathLike | None): working directory for the Codex session.
 - `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to Codex.
+- `include_thinking` (bool): when true, return all agent messages joined.
 
-### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -205,6 +207,7 @@ the same conversation and returns only the agent's message.
 - `flags` (str | None): extra CLI flags to pass to Codex.
 - `welfare` (bool): when true, append welfare stop instructions to each prompt
   and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
+- `include_thinking` (bool): when true, return all agent messages joined.
 
 ### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None) -> dict`
 
@@ -290,6 +293,7 @@ Simple result object returned by `foreach()`.
 ## Behavior notes
 
 - Uses `codex exec --json` and parses JSONL events for `agent_message` items.
+- Returns the last `agent_message` by default; set `include_thinking=True` to join all messages.
 - Automatically passes `--skip-git-repo-check` so it can run outside a git repo.
 - Passes `--yolo` by default (use `--no-yolo` or `yolo=False` for `--full-auto`).
 - Raises `RuntimeError` if Codex exits non-zero or returns no agent message.

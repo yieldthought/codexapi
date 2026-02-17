@@ -10,7 +10,7 @@ from . import welfare
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 
 
-def agent(prompt, cwd=None, yolo=True, flags=None):
+def agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False):
     """Run a single Codex turn and return only the agent's message.
 
     Args:
@@ -18,11 +18,14 @@ def agent(prompt, cwd=None, yolo=True, flags=None):
         cwd: Optional working directory for the Codex session.
         yolo: Whether to pass --yolo to Codex.
         flags: Additional raw CLI flags to pass to Codex.
+        include_thinking: When true, return all agent messages joined together.
 
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
-    message, _thread_id = _run_codex(prompt, cwd, None, yolo, flags)
+    message, _thread_id = _run_codex(
+        prompt, cwd, None, yolo, flags, include_thinking
+    )
     return message
 
 
@@ -51,6 +54,7 @@ class Agent:
         thread_id=None,
         flags=None,
         welfare=False,
+        include_thinking=False,
     ):
         """Create a new session wrapper.
 
@@ -62,11 +66,13 @@ class Agent:
             flags: Additional raw CLI flags to pass to Codex.
             welfare: When true, append welfare stop instructions to each prompt
                 and raise WelfareStop if the agent outputs MAKE IT STOP.
+            include_thinking: When true, return all agent messages joined together.
         """
         self.cwd = cwd
         self._yolo = yolo
         self._flags = flags
         self._welfare = welfare
+        self._include_thinking = include_thinking
         self.thread_id = thread_id
 
     def __call__(self, prompt):
@@ -79,6 +85,7 @@ class Agent:
             self.thread_id,
             self._yolo,
             self._flags,
+            self._include_thinking,
         )
         if thread_id:
             self.thread_id = thread_id
@@ -87,7 +94,7 @@ class Agent:
         return message
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags):
+def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -124,10 +131,10 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags):
             msg = f"{msg}\n{stderr}"
         raise RuntimeError(msg)
 
-    return _parse_jsonl(result.stdout)
+    return _parse_jsonl(result.stdout, include_thinking)
 
 
-def _parse_jsonl(output):
+def _parse_jsonl(output, include_thinking):
     """Extract agent messages and the latest thread id from Codex JSONL output."""
     thread_id = None
     messages = []
@@ -161,4 +168,6 @@ def _parse_jsonl(output):
             "Codex returned no agent message. Raw output:\n" + fallback
         )
 
-    return "\n\n".join(messages), thread_id
+    if include_thinking:
+        return "\n\n".join(messages), thread_id
+    return messages[-1], thread_id

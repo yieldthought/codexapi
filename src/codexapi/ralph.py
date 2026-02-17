@@ -41,6 +41,7 @@ class Ralph:
         self.max_iterations = max_iterations
         self.completion_promise = completion_promise
         self.fresh = fresh
+        self.include_thinking = True
 
     def hook_before_loop(self):
         """Hook called once before the loop starts."""
@@ -156,9 +157,23 @@ class Ralph:
                 self.hook_before_iteration(iteration)
 
                 if self.fresh:
-                    runner = Agent(self.cwd, self.yolo, None, self.flags, welfare=True)
+                    runner = Agent(
+                        self.cwd,
+                        self.yolo,
+                        None,
+                        self.flags,
+                        welfare=True,
+                        include_thinking=self.include_thinking,
+                    )
                 elif runner is None:
-                    runner = Agent(self.cwd, self.yolo, None, self.flags, welfare=True)
+                    runner = Agent(
+                        self.cwd,
+                        self.yolo,
+                        None,
+                        self.flags,
+                        welfare=True,
+                        include_thinking=self.include_thinking,
+                    )
 
                 prompt = self.build_prompt(iteration)
                 stopped = False

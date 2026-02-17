@@ -110,6 +110,7 @@ class Science(Ralph):
             completion_promise,
             fresh,
         )
+        self.include_thinking = True
         self._prompt_a = prompt_a
         self._prompt_b = prompt_b
         self._logbook_path = _logbook_path(cwd)

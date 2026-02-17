@@ -1053,6 +1053,11 @@ def main(argv=None):
         "--flags",
         help="Additional raw CLI flags to pass to Codex (quoted as needed).",
     )
+    run_parser.add_argument(
+        "--include-thinking",
+        action="store_true",
+        help="Return all agent messages joined together.",
+    )
 
     lead_parser = subparsers.add_parser(
         "lead",
@@ -1637,12 +1642,15 @@ def main(argv=None):
                 args.yolo,
                 args.thread_id,
                 args.flags,
+                include_thinking=args.include_thinking,
             )
             message = session(prompt)
             if args.print_thread_id:
                 print(f"thread_id={session.thread_id}", file=sys.stderr)
         else:
-            message = agent(prompt, args.cwd, args.yolo, args.flags)
+            message = agent(
+                prompt, args.cwd, args.yolo, args.flags, args.include_thinking
+            )
 
     if message is not None:
         print(message)
