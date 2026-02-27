@@ -24,6 +24,7 @@ from .lead import lead
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)([smhdSMHD]?)\s*$")
 _TAIL_BYTES = 256 * 1024
 _TAIL_MAX_BYTES = 4 * 1024 * 1024
 _TAIL_MIN_LINES = 200
@@ -90,6 +91,25 @@ def _read_prompt(prompt):
     if not data.strip():
         raise SystemExit("No prompt provided. Pass a prompt or pipe via stdin.")
     return data
+
+
+def _parse_duration_seconds(value, flag_name):
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    if not text:
+        raise SystemExit(f"{flag_name} cannot be empty.")
+    match = _DURATION_RE.match(text)
+    if not match:
+        raise SystemExit(
+            f"{flag_name} must be a number with optional unit s/m/h/d (example: 90m)."
+        )
+    amount = float(match.group(1))
+    unit = (match.group(2) or "m").lower()
+    if amount < 0:
+        raise SystemExit(f"{flag_name} must be >= 0.")
+    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+    return amount * multiplier
 
 
 def _read_prompt_file(path):
@@ -1026,6 +1046,8 @@ def main(argv=None):
         "Science mode (science command):\n"
         "  Wraps your short task in a science prompt and runs it via the Ralph loop.\n"
         "  Default uses --yolo. Use --no-yolo to run --full-auto instead.\n"
+        "  Optional --max-duration stops before starting the next iteration once\n"
+        "  the duration limit is reached (e.g. 90m, 2h, 45s; default unit is minutes).\n"
     )
     parser = argparse.ArgumentParser(
         prog="codexapi",
@@ -1256,6 +1278,13 @@ def main(argv=None):
         help="Max iterations for the loop (0 means unlimited).",
     )
     science_parser.add_argument(
+        "--max-duration",
+        help=(
+            "Maximum loop runtime. Stops after the current iteration when reached. "
+            "Accepts s/m/h/d units (e.g. 90m, 2h, 45s); default unit is minutes."
+        ),
+    )
+    science_parser.add_argument(
         "--cancel",
         action="store_true",
         help="Cancel the Ralph loop state in the target cwd.",
@@ -1440,6 +1469,8 @@ def main(argv=None):
                 )
             if args.max_iterations != 0:
                 raise SystemExit("--max-iterations is not allowed with --cancel.")
+            if args.max_duration:
+                raise SystemExit("--max-duration is not allowed with --cancel.")
             print(cancel_ralph_loop(args.cwd))
             return
         if args.ralph_fresh is None:
@@ -1579,6 +1610,7 @@ def main(argv=None):
     if args.command == "science":
         if args.max_iterations < 0:
             raise SystemExit("--max-iterations must be >= 0.")
+        max_duration_seconds = _parse_duration_seconds(args.max_duration, "--max-duration")
         Science(
             prompt,
             args.cwd,
@@ -1587,6 +1619,7 @@ def main(argv=None):
             args.max_iterations,
             args.completion_promise,
             args.ralph_fresh,
+            max_duration_seconds,
         )()
         return
     if args.command == "lead":

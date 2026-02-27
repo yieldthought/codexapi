@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 from .agent import agent
@@ -29,7 +30,10 @@ _SCIENCE_TEMPLATE_B = (
     "Try your best and have fun with this one! If you "
     "think of several options, pick one and run with it - I will not be available "
     "to make decisions for you, I give you my full permission to explore and make "
-    "your own best judgement towards our goal! Remember to update SCIENCE.md. "
+    "your own best judgement towards our goal! If you are in a git repository, "
+    "create and use a local branch for this run. Make local commits for improvements "
+    "worth keeping, but never commit or reset LOGBOOK.md or SCIENCE.md. "
+    "Remember to update SCIENCE.md. "
     "Good hunting!"
 )
 _LOGBOOK_NAME = "LOGBOOK.md"
@@ -97,7 +101,10 @@ class Science(Ralph):
         max_iterations=0,
         completion_promise=None,
         fresh=True,
+        max_duration_seconds=0,
     ):
+        if max_duration_seconds < 0:
+            raise ValueError("max_duration_seconds must be >= 0")
         self._task = task.strip() if isinstance(task, str) else task
         prompt_a, prompt_b = _science_parts(task)
         prompt = f"{prompt_a}{prompt_b}"
@@ -117,11 +124,20 @@ class Science(Ralph):
         self._best_metrics = None
         self._run_title = None
         self._pushover = Pushover()
+        self._pushover_enabled = False
+        self._max_duration_seconds = float(max_duration_seconds)
+        self._loop_started_monotonic = None
+        self._duration_limit_hit = False
+        self._last_iteration = 0
 
     def hook_before_loop(self):
         super().hook_before_loop()
-        self._pushover.ensure_ready()
-        self._run_title = self._build_run_title()
+        self._loop_started_monotonic = time.monotonic()
+        self._pushover_enabled = self._pushover.ensure_ready()
+        if self._pushover_enabled:
+            self._run_title = self._build_run_title()
+        else:
+            self._run_title = _fallback_title(self._task)
 
     def build_prompt(self, iteration):
         if iteration <= 1:
@@ -131,8 +147,33 @@ class Science(Ralph):
 
     def hook_after_iteration(self, iteration, message):
         super().hook_after_iteration(iteration, message)
+        self._last_iteration = iteration
         self._append_logbook(iteration, message)
         self._extract_and_notify(message)
+        self._mark_duration_stop(iteration)
+
+    def hook_after_loop(self, last_message, stop_reason):
+        super().hook_after_loop(last_message, stop_reason)
+        if not self._pushover_enabled:
+            return
+        status = _format_final_status(
+            stop_reason,
+            self.max_iterations,
+            self.completion_promise,
+            self._duration_limit_hit,
+        )
+        lines = [
+            f"Science run ended: {status}",
+            f"Iterations completed: {self._last_iteration}",
+        ]
+        if self._best_metrics:
+            summary = _single_line(self._best_metrics.get("summary", "")).strip()
+            metrics_text = _format_metrics(self._best_metrics.get("metrics") or [])
+            if summary:
+                lines.append(f"Best summary: {summary}")
+            if metrics_text:
+                lines.append(f"Best metrics: {metrics_text}")
+        self._pushover.send(self._run_title, "\n".join(lines))
 
     def hook_new_best(self, result):
         super().hook_new_best(result)
@@ -185,6 +226,25 @@ class Science(Ralph):
         if not title:
             title = _fallback_title(self._task)
         return title
+
+    def _mark_duration_stop(self, iteration):
+        if self._duration_limit_hit:
+            return
+        if self._max_duration_seconds <= 0:
+            return
+        if self._loop_started_monotonic is None:
+            return
+        elapsed = time.monotonic() - self._loop_started_monotonic
+        if elapsed < self._max_duration_seconds:
+            return
+        self._duration_limit_hit = True
+        self.max_iterations = (
+            iteration if self.max_iterations == 0 else min(self.max_iterations, iteration)
+        )
+        print(
+            "Science loop: Max duration reached; "
+            "stopping after the current iteration."
+        )
 
 
 
@@ -300,3 +360,30 @@ def _fallback_title(task):
 
 def _warn(message):
     print(message, file=sys.stderr)
+
+
+def _format_final_status(
+    stop_reason,
+    max_iterations,
+    completion_promise,
+    duration_limit_hit,
+):
+    if stop_reason == "max_iterations":
+        if duration_limit_hit:
+            return "max duration reached"
+        return f"max iterations reached ({max_iterations})"
+    if stop_reason == "promise":
+        if completion_promise:
+            return f"completion promise met ({completion_promise})"
+        return "completion promise met"
+    if stop_reason == "welfare_stop":
+        return "agent requested welfare stop"
+    if stop_reason == "canceled":
+        return "loop canceled"
+    if stop_reason == "interrupted":
+        return "interrupted"
+    if stop_reason == "error":
+        return "stopped due to error"
+    if stop_reason:
+        return _single_line(stop_reason)
+    return "finished"
