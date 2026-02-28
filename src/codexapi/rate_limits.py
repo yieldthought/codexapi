@@ -36,6 +36,7 @@ def rate_limits():
 
 def _extract_rate_limits(path):
     last = None
+    preferred = None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
@@ -49,9 +50,23 @@ def _extract_rate_limits(path):
                 rate_data = payload.get("rate_limits")
                 if isinstance(rate_data, dict):
                     last = rate_data
+                    if _is_primary_limit(rate_data):
+                        preferred = rate_data
     except OSError:
         return None
-    return last
+    return preferred or last
+
+
+def _is_primary_limit(rate_data):
+    limit_id = rate_data.get("limit_id")
+    if isinstance(limit_id, str):
+        return limit_id == "codex"
+    limit_name = rate_data.get("limit_name")
+    if limit_name is None:
+        return True
+    if isinstance(limit_name, str):
+        return not limit_name.strip()
+    return False
 
 
 def quota_line():
