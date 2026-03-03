@@ -102,6 +102,7 @@ class Science(Ralph):
         completion_promise=None,
         fresh=True,
         max_duration_seconds=0,
+        backend=None,
     ):
         if max_duration_seconds < 0:
             raise ValueError("max_duration_seconds must be >= 0")
@@ -116,6 +117,7 @@ class Science(Ralph):
             max_iterations,
             completion_promise,
             fresh,
+            backend,
         )
         self.include_thinking = True
         self._prompt_a = prompt_a
@@ -129,6 +131,7 @@ class Science(Ralph):
         self._loop_started_monotonic = None
         self._duration_limit_hit = False
         self._last_iteration = 0
+        self._backend = backend
 
     def hook_before_loop(self):
         super().hook_before_loop()
@@ -196,7 +199,7 @@ class Science(Ralph):
     def _extract_and_notify(self, message):
         prompt = _build_metrics_prompt(self._task, message, self._best_metrics)
         try:
-            output = agent(prompt, self.cwd, self.yolo, self.flags)
+            output = agent(prompt, self.cwd, self.yolo, self.flags, backend=self._backend)
         except Exception as exc:
             _warn(f"Metrics extraction failed: {exc}")
             return
@@ -219,7 +222,7 @@ class Science(Ralph):
             ]
         )
         try:
-            title = agent(prompt, self.cwd, self.yolo, self.flags)
+            title = agent(prompt, self.cwd, self.yolo, self.flags, backend=self._backend)
         except Exception:
             title = ""
         title = _single_line(title).strip()

@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -50,7 +50,10 @@ class _ImmediateSuccessTask(Task):
 class TaskProgressEstimateFailureTests(unittest.TestCase):
     def test_progress_does_not_crash_when_initial_estimate_fails(self):
         task = _ImmediateSuccessTask()
-        with patch("codexapi.task.estimate", side_effect=RuntimeError("bad json")):
+        mock_estimate = Mock(side_effect=RuntimeError("bad json"))
+        with patch.dict(
+            Task._estimate_progress.__globals__, {"estimate": mock_estimate}
+        ):
             result = task(progress=True)
         self.assertTrue(result.success)
         self.assertEqual(result.iterations, 1)
@@ -59,9 +62,11 @@ class TaskProgressEstimateFailureTests(unittest.TestCase):
 
     def test_progress_does_not_crash_when_later_estimate_fails(self):
         task = _ImmediateSuccessTask()
-        with patch(
-            "codexapi.task.estimate",
-            side_effect=[(5, "initial"), RuntimeError("bad json")],
+        mock_estimate = Mock(
+            side_effect=[(5, "initial"), RuntimeError("bad json")]
+        )
+        with patch.dict(
+            Task._estimate_progress.__globals__, {"estimate": mock_estimate}
         ):
             result = task(progress=True)
         self.assertTrue(result.success)

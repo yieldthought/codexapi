@@ -77,6 +77,7 @@ class TaskFile(AutoTask):
         yolo=True,
         thread_id=None,
         flags=None,
+        backend=None,
     ):
         task_def = load_task_file(path)
         if max_iterations is None:
@@ -106,6 +107,7 @@ class TaskFile(AutoTask):
                 tear_down=rendered["tear_down"],
                 on_success=rendered["on_success"],
                 on_failure=rendered["on_failure"],
+                backend=backend,
             )
             return
         super().__init__(
@@ -120,4 +122,5 @@ class TaskFile(AutoTask):
             tear_down=rendered["tear_down"],
             on_success=rendered["on_success"],
             on_failure=rendered["on_failure"],
+            backend=backend,
         )

@@ -1,4 +1,4 @@
-"""Task wrapper for running Codex Agent flows with checkers."""
+"""Task wrapper for running agent flows with checkers."""
 
 import json
 import logging
@@ -183,14 +183,23 @@ def _format_task_title(prompt):
     return title
 
 
-def estimate(prompt, agent_output, check_output, cwd, yolo, flags, previous_total):
+def estimate(
+    prompt,
+    agent_output,
+    check_output,
+    cwd,
+    yolo,
+    flags,
+    previous_total,
+    backend=None,
+):
     estimate_prompt = _build_estimate_prompt(
         prompt,
         agent_output or "",
         check_output or "",
         previous_total,
     )
-    output = agent(estimate_prompt, cwd, yolo, flags)
+    output = agent(estimate_prompt, cwd, yolo, flags, backend=backend)
     return _estimate_result(output)
 
 
@@ -248,6 +257,7 @@ def task(
     tear_down=None,
     on_success=None,
     on_failure=None,
+    backend=None,
 ):
     """Run a prompt with optional checker-driven retries.
 
@@ -256,14 +266,15 @@ def task(
         check: False to skip verification, None for the default check, or
             a string check prompt. The string "None" skips verification.
         max_iterations: Maximum number of task iterations (0 means unlimited).
-        cwd: Optional working directory for the Codex session.
-        yolo: Whether to pass --yolo to Codex.
-        flags: Additional raw CLI flags to pass to Codex.
+        cwd: Optional working directory for the agent session.
+        yolo: Whether to pass --yolo to the agent backend.
+        flags: Additional raw CLI flags to pass to the agent backend.
         progress: Whether to show a tqdm progress bar with status updates.
         set_up: Optional setup prompt to run before the task.
         tear_down: Optional cleanup prompt to run after the task.
         on_success: Optional prompt to run after a successful task.
         on_failure: Optional prompt to run after a failed task.
+        backend: Agent backend to use ("codex" or "cursor").
 
     Returns:
         The agent's response text when the task succeeds.
@@ -283,6 +294,7 @@ def task(
         tear_down,
         on_success,
         on_failure,
+        backend,
     )
     if result.success:
         return result.summary
@@ -301,6 +313,7 @@ def task_result(
     tear_down=None,
     on_success=None,
     on_failure=None,
+    backend=None,
 ):
     """Run a prompt with optional checker-driven retries and return TaskResult.
 
@@ -330,6 +343,7 @@ def task_result(
         tear_down=tear_down_text,
         on_success=on_success_text,
         on_failure=on_failure_text,
+        backend=backend,
     )
     return runner(progress=progress)
 
@@ -357,7 +371,7 @@ class TaskResult:
 
 
 class Task:
-    """ Run a Codex Agent in a directory until it is verifiably done.
+    """ Run an agent in a directory until it is verifiably done.
         Subclass and override these functions:
             set_up     : prepare working directory, install things etc.
             tear_down  : undo the above and leave machine in a clean state
@@ -375,6 +389,7 @@ class Task:
         yolo=True,
         thread_id=None,
         flags=None,
+        backend=None,
     ):
         if max_iterations < 0:
             raise ValueError("max_iterations must be >= 0")
@@ -387,6 +402,7 @@ class Task:
         self.check_text = None
         self._yolo = yolo
         self._flags = flags
+        self._backend = backend
         self._progress_enabled = False
         self._progress_updates = False
         self._progress_bar = None
@@ -399,6 +415,7 @@ class Task:
             thread_id,
             flags,
             welfare=True,
+            backend=backend,
         )
 
     def set_up(self):
@@ -422,7 +439,13 @@ class Task:
         last_output = output if output is not None else self.last_output
         last_output = last_output or ""
         check_prompt = _build_check_prompt(check_text, last_output)
-        check_output = agent(check_prompt, self.cwd, self._yolo, self._flags)
+        check_output = agent(
+            check_prompt,
+            self.cwd,
+            self._yolo,
+            self._flags,
+            backend=self._backend,
+        )
         self.last_check_output = check_output
         success, reason = _check_result(check_output)
         if success:
@@ -498,6 +521,7 @@ class Task:
                     self._yolo,
                     self._flags,
                     self._progress_total,
+                    backend=self._backend,
                 ),
                 None,
             )
@@ -671,12 +695,21 @@ class AutoTask(Task):
         tear_down=None,
         on_success=None,
         on_failure=None,
+        backend=None,
     ):
         if not (check is None or check is False or isinstance(check, str)):
             raise TypeError("check must be a string or False")
         if max_iterations < 0:
             raise ValueError("max_iterations must be >= 0")
-        super().__init__(prompt, max_iterations, cwd, yolo, thread_id, flags)
+        super().__init__(
+            prompt,
+            max_iterations,
+            cwd,
+            yolo,
+            thread_id,
+            flags,
+            backend,
+        )
         self.check_text = check
         self._set_up = _validate_hook("set_up", set_up)
         self._tear_down = _validate_hook("tear_down", tear_down)
@@ -685,7 +718,7 @@ class AutoTask(Task):
 
     def _run_hook(self, text):
         if text:
-            agent(text, self.cwd, self._yolo, self._flags)
+            agent(text, self.cwd, self._yolo, self._flags, backend=self._backend)
 
     def set_up(self):
         self._run_hook(self._set_up)
@@ -698,3 +731,4 @@ class AutoTask(Task):
 
     def on_failure(self, result):
         self._run_hook(self._on_failure)
+

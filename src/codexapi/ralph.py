@@ -1,4 +1,4 @@
-"""Ralph Wiggum-style loop for Codex runs."""
+"""Ralph Wiggum-style loop for agent runs."""
 
 import os
 import re
@@ -24,6 +24,7 @@ class Ralph:
         max_iterations=0,
         completion_promise=None,
         fresh=True,
+        backend=None,
     ):
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
@@ -41,6 +42,7 @@ class Ralph:
         self.max_iterations = max_iterations
         self.completion_promise = completion_promise
         self.fresh = fresh
+        self.backend = backend
         self.include_thinking = True
 
     def hook_before_loop(self):
@@ -164,6 +166,7 @@ class Ralph:
                         self.flags,
                         welfare=True,
                         include_thinking=self.include_thinking,
+                        backend=self.backend,
                     )
                 elif runner is None:
                     runner = Agent(
@@ -173,6 +176,7 @@ class Ralph:
                         self.flags,
                         welfare=True,
                         include_thinking=self.include_thinking,
+                        backend=self.backend,
                     )
 
                 prompt = self.build_prompt(iteration)

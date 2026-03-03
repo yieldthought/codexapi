@@ -41,6 +41,7 @@ def foreach(
     cwd=None,
     yolo=True,
     flags=None,
+    backend=None,
 ):
     """Run a task file over each item in list_file and update the file."""
     lines, ends_with_newline = _read_lines(list_file)
@@ -75,6 +76,7 @@ def foreach(
                         cwd,
                         yolo,
                         flags,
+                        backend,
                         counts,
                         results,
                         progress,
@@ -171,6 +173,7 @@ def _run_item(
     cwd,
     yolo,
     flags,
+    backend,
     counts,
     results,
     progress,
@@ -195,6 +198,7 @@ def _run_item(
             yolo=yolo,
             thread_id=None,
             flags=flags,
+            backend=backend,
         )
         max_iterations = task.max_iterations
         result = task()

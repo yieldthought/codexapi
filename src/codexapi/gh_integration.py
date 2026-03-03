@@ -234,8 +234,9 @@ class GhTaskFile(TaskFile):
         yolo=True,
         thread_id=None,
         flags=None,
+        backend=None,
     ):
-        super().__init__(path, item_text, None, cwd, yolo, thread_id, flags)
+        super().__init__(path, item_text, None, cwd, yolo, thread_id, flags, backend)
         self.issue = issue
         self.project = project
         self._progress_updates = True
@@ -308,6 +309,7 @@ class GhTaskRunner:
         cwd=None,
         yolo=True,
         flags=None,
+        backend=None,
     ):
         task_map = _task_file_map(task_files)
         self.project = Project(project, name, has_label=list(task_map))
@@ -337,6 +339,7 @@ class GhTaskRunner:
             yolo,
             None,
             flags,
+            backend,
         )
 
     def __call__(self, progress=False):

@@ -44,6 +44,7 @@ class _FakeAgent:
         flags=None,
         welfare=False,
         include_thinking=False,
+        backend=None,
     ):
         pass
 

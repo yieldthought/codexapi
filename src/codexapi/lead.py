@@ -1,6 +1,6 @@
-"""Periodic lead loop for long-running Codex work.
+"""Periodic lead loop for long-running agent work.
 
-lead keeps a single Codex thread alive and periodically checks in with the
+lead keeps a single agent thread alive and periodically checks in with the
 current time and a reminder of the original instructions. Each check-in expects
 a small JSON status payload so the loop can decide whether to continue. When a
 leadbook is enabled, its contents are injected into each check-in and must be
@@ -68,16 +68,25 @@ Decision & Next Move:
 """
 
 
-def lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None):
+def lead(
+    minutes,
+    prompt,
+    cwd=None,
+    yolo=True,
+    flags=None,
+    leadbook=None,
+    backend=None,
+):
     """Run a periodic lead loop.
 
     Args:
         minutes: Check-in interval in whole minutes (>= 0).
         prompt: The original instruction prompt.
-        cwd: Optional working directory for the Codex session.
-        yolo: Whether to pass --yolo to Codex.
-        flags: Additional raw CLI flags to pass to Codex.
+        cwd: Optional working directory for the agent session.
+        yolo: Whether to pass --yolo to the agent backend.
+        flags: Additional raw CLI flags to pass to the agent backend.
         leadbook: Optional path to the leadbook file. Set to False to disable.
+        backend: Agent backend to use ("codex" or "cursor").
 
     Returns:
         The last parsed JSON status object.
@@ -90,7 +99,7 @@ def lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None):
         raise ValueError("prompt must be a non-empty string")
 
     interval = minutes * 60
-    session = Agent(cwd, yolo, None, flags)
+    session = Agent(cwd, yolo, None, flags, backend=backend)
     pushover = Pushover()
     pushover.ensure_ready()
     title = _format_title(prompt)

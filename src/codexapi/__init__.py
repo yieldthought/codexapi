@@ -1,4 +1,4 @@
-"""Minimal Python API for running the Codex CLI."""
+"""Minimal Python API for running agent CLIs."""
 
 from .agent import Agent, WelfareStop, agent
 from .foreach import ForeachResult, foreach

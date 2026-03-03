@@ -1,4 +1,4 @@
-"""Codex CLI wrapper used by the codexapi public interface."""
+"""Agent CLI wrapper used by the codexapi public interface."""
 
 import json
 import os
@@ -8,23 +8,45 @@ import subprocess
 from . import welfare
 
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+_CURSOR_BIN = os.environ.get("CURSOR_BIN", "cursor")
+_SUPPORTED_BACKENDS = {"codex", "cursor"}
 
 
-def agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False):
-    """Run a single Codex turn and return only the agent's message.
+def _resolve_backend(backend):
+    if backend is None:
+        backend = os.environ.get("CODEXAPI_BACKEND", "codex")
+    if not isinstance(backend, str):
+        raise TypeError("backend must be a string")
+    backend = backend.strip().lower()
+    if backend not in _SUPPORTED_BACKENDS:
+        choices = ", ".join(sorted(_SUPPORTED_BACKENDS))
+        raise ValueError(f"Unknown backend '{backend}'. Choose one of: {choices}.")
+    return backend
+
+
+def agent(
+    prompt,
+    cwd=None,
+    yolo=True,
+    flags=None,
+    include_thinking=False,
+    backend=None,
+):
+    """Run a single agent turn and return only the agent's message.
 
     Args:
-        prompt: The user prompt to send to Codex.
-        cwd: Optional working directory for the Codex session.
-        yolo: Whether to pass --yolo to Codex.
-        flags: Additional raw CLI flags to pass to Codex.
+        prompt: The user prompt to send to the agent backend.
+        cwd: Optional working directory for the agent session.
+        yolo: Whether to pass --yolo to the agent backend.
+        flags: Additional raw CLI flags to pass to the agent backend.
         include_thinking: When true, return all agent messages joined together.
+        backend: Agent backend to use ("codex" or "cursor").
 
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
-    message, _thread_id = _run_codex(
-        prompt, cwd, None, yolo, flags, include_thinking
+    message, _thread_id = _run_agent(
+        prompt, cwd, None, yolo, flags, include_thinking, backend
     )
     return message
 
@@ -39,7 +61,7 @@ class WelfareStop(RuntimeError):
 
 
 class Agent:
-    """Stateful Codex session wrapper that resumes the same conversation.
+    """Stateful session wrapper that resumes the same conversation.
 
     Example:
         session = Agent()
@@ -55,18 +77,19 @@ class Agent:
         flags=None,
         welfare=False,
         include_thinking=False,
+        backend=None,
     ):
         """Create a new session wrapper.
 
         Args:
-            cwd: Optional working directory for the Codex session.
-            yolo: Whether to pass --yolo to Codex.
-            agent: Agent backend to use (only "codex" is supported).
-            trace_id: Optional Codex thread id to resume from the first call.
-            flags: Additional raw CLI flags to pass to Codex.
+            cwd: Optional working directory for the agent session.
+            yolo: Whether to pass --yolo to the agent backend.
+            thread_id: Optional thread/session id to resume from the first call.
+            flags: Additional raw CLI flags to pass to the agent backend.
             welfare: When true, append welfare stop instructions to each prompt
                 and raise WelfareStop if the agent outputs MAKE IT STOP.
             include_thinking: When true, return all agent messages joined together.
+            backend: Agent backend to use ("codex" or "cursor").
         """
         self.cwd = cwd
         self._yolo = yolo
@@ -74,24 +97,33 @@ class Agent:
         self._welfare = welfare
         self._include_thinking = include_thinking
         self.thread_id = thread_id
+        self._backend = backend
 
     def __call__(self, prompt):
-        """Send a prompt to Codex and return only the agent's message."""
+        """Send a prompt to the agent backend and return the message."""
         if self._welfare:
             prompt = welfare.append_instructions(prompt)
-        message, thread_id = _run_codex(
+        message, thread_id = _run_agent(
             prompt,
             self.cwd,
             self.thread_id,
             self._yolo,
             self._flags,
             self._include_thinking,
+            self._backend,
         )
         if thread_id:
             self.thread_id = thread_id
         if self._welfare and welfare.stop_requested(message):
             raise WelfareStop(message)
         return message
+
+
+def _run_agent(prompt, cwd, thread_id, yolo, flags, include_thinking, backend):
+    backend = _resolve_backend(backend)
+    if backend == "codex":
+        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking)
+    return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking)
 
 
 def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
@@ -134,6 +166,40 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
     return _parse_jsonl(result.stdout, include_thinking)
 
 
+def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking):
+    """Invoke the Cursor agent CLI and return the message plus session id (if any)."""
+    command = [
+        _CURSOR_BIN,
+        "agent",
+        "--trust",
+    ]
+    if cwd:
+        command.extend(["--workspace", os.fspath(cwd)])
+    if thread_id:
+        command.extend(["--resume", thread_id])
+    if yolo:
+        command.append("--yolo")
+    if flags:
+        command.extend(shlex.split(flags))
+    command.extend(["--print", "--output-format", "json"])
+
+    result = subprocess.run(
+        command,
+        input=prompt,
+        text=True,
+        capture_output=True,
+        cwd=os.fspath(cwd) if cwd else None,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        msg = f"Cursor agent failed with exit code {result.returncode}."
+        if stderr:
+            msg = f"{msg}\n{stderr}"
+        raise RuntimeError(msg)
+
+    return _parse_cursor_json(result.stdout, include_thinking)
+
+
 def _parse_jsonl(output, include_thinking):
     """Extract agent messages and the latest thread id from Codex JSONL output."""
     thread_id = None
@@ -171,3 +237,51 @@ def _parse_jsonl(output, include_thinking):
     if include_thinking:
         return "\n\n".join(messages), thread_id
     return messages[-1], thread_id
+
+
+def _parse_cursor_json(output, include_thinking):
+    """Extract the agent message and session id from Cursor JSON output.
+
+    Cursor returns a single result string; include_thinking has no effect.
+    """
+    payload = None
+    raw_lines = []
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            decoded = json.loads(line)
+        except json.JSONDecodeError:
+            raw_lines.append(line)
+            continue
+        if isinstance(decoded, dict):
+            if "result" in decoded:
+                payload = decoded
+            elif payload is None:
+                payload = decoded
+
+    if payload is None:
+        fallback = "\n".join(raw_lines) if raw_lines else output.strip()
+        raise RuntimeError(
+            "Cursor returned no JSON output. Raw output:\n" + fallback
+        )
+
+    if payload.get("is_error"):
+        message = payload.get("result")
+        if not isinstance(message, str) or not message.strip():
+            message = "Cursor returned an error response."
+        raise RuntimeError(message)
+
+    result = payload.get("result")
+    if not isinstance(result, str):
+        fallback = output.strip()
+        raise RuntimeError(
+            "Cursor returned no result text. Raw output:\n" + fallback
+        )
+
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str):
+        session_id = None
+    return result, session_id

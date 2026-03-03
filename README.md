@@ -1,12 +1,13 @@
 # CodexAPI
 
-Use OpenAI's codex from python as easily as calling a function with your codex credits instead of the API.
+Use Codex or Cursor agents from python as easily as calling a function, using your CLI auth instead of the API.
 
 *Note: this project is not affiliated with OpenAI in any way. Thanks for the awesome tools and models though!*
 
 ## Requirements
 
-- Codex CLI installed and authenticated (`codex` must be on your PATH).
+- Codex CLI installed and authenticated (`codex` must be on your PATH), or
+- Cursor Agent CLI installed and authenticated (`cursor` must be on your PATH).
 - Python 3.8+.
 
 ## Install
@@ -44,6 +45,9 @@ result = task()
 print(result.success, result.summary)
 ```
 
+Use `backend="cursor"` (or set `CODEXAPI_BACKEND=cursor`) to switch to the
+Cursor agent backend.
+
 ## CLI
 
 After installing, use the `codexapi` command:
@@ -52,6 +56,7 @@ After installing, use the `codexapi` command:
 codexapi run "Summarize this repo."
 codexapi run --cwd /path/to/project "Fix the failing tests."
 echo "Say hello." | codexapi run
+codexapi run --backend cursor "Summarize this repo."
 ```
 
 `codexapi task` exits with code 0 on success and 1 on failure.
@@ -107,15 +112,16 @@ Show running sessions and their latest activity:
 codexapi top
 ```
 Press `h` for keys.
+`codexapi top` and `codexapi limit` are Codex-only.
 
-Resume a session and print the thread id to stderr:
+Resume a session and print the thread/session id to stderr:
 
 ```bash
 codexapi run --thread-id THREAD_ID --print-thread-id "Continue where we left off."
 ```
 
-Use `--no-yolo` to run Codex with `--full-auto` instead.
-Use `--include-thinking` to return all agent messages joined together for `codexapi run`.
+Use `--no-yolo` to disable `--yolo` (Codex uses `--full-auto`).
+Use `--include-thinking` to return all agent messages joined together for `codexapi run` (Codex only).
 
 Lead mode periodically checks in on a long-running agent session with the
 current time and prints JSON status updates. The agent controls the loop by
@@ -191,31 +197,34 @@ codexapi foreach list.txt task.yaml --retry-all
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False) -> str`
+### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False, backend=None) -> str`
 
-Runs a single Codex turn and returns only the agent's message. Any reasoning
+Runs a single agent turn and returns only the agent's message. Any reasoning
 items are filtered out.
 
-- `prompt` (str): prompt to send to Codex.
-- `cwd` (str | PathLike | None): working directory for the Codex session.
-- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
-- `flags` (str | None): extra CLI flags to pass to Codex.
+- `prompt` (str): prompt to send to the agent backend.
+- `cwd` (str | PathLike | None): working directory for the agent session.
+- `yolo` (bool): pass `--yolo` when true (defaults to true).
+- `flags` (str | None): extra CLI flags to pass to the agent backend.
 - `include_thinking` (bool): when true, return all agent messages joined.
+- `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
 
-### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False, backend=None)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
 
-- `__call__(prompt) -> str`: send a prompt to Codex and return the message.
+- `__call__(prompt) -> str`: send a prompt to the agent backend and return the message.
 - `thread_id -> str | None`: expose the underlying session id once created.
-- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
-- `flags` (str | None): extra CLI flags to pass to Codex.
+- `yolo` (bool): pass `--yolo` when true (defaults to true).
+- `flags` (str | None): extra CLI flags to pass to the agent backend.
 - `welfare` (bool): when true, append welfare stop instructions to each prompt
   and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
 - `include_thinking` (bool): when true, return all agent messages joined.
+- `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
+For Cursor, `thread_id` corresponds to the `session_id` returned by the agent.
 
-### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None) -> dict`
+### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None, backend=None) -> dict`
 
 Runs a long-lived agent session and periodically checks in with the current
 local time and a reminder of `prompt`. Each check-in expects JSON with keys:
@@ -226,8 +235,9 @@ JSON is invalid, lead asks the agent once to retry. The loop stops when
 Lead also injects the leadbook content into each prompt. By default it uses
 `LEADBOOK.md` in the working directory. Pass `leadbook=False` to disable or a
 path string to override the location.
+Set `backend="cursor"` (or `CODEXAPI_BACKEND=cursor`) to use Cursor.
 
-### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> str`
+### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None) -> str`
 
 Runs a task with checker-driven retries and returns the success summary.
 Raises `TaskFailed` when the maximum iterations are reached.
@@ -236,16 +246,17 @@ Raises `TaskFailed` when the maximum iterations are reached.
 - `max_iterations` (int): maximum number of task iterations (0 means unlimited).
 - `progress` (bool): show a tqdm progress bar with a one-line status after each round.
 - `set_up`/`tear_down`/`on_success`/`on_failure` (str | None): optional hook prompts.
+- `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
 
-### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None) -> TaskResult`
+### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None) -> TaskResult`
 
 Runs a task with checker-driven retries and returns a `TaskResult` without
 raising `TaskFailed`.
 Arguments mirror `task()` (including hooks).
 
-### `Task(prompt, max_iterations=10, cwd=None, yolo=True, thread_id=None, flags=None)`
+### `Task(prompt, max_iterations=10, cwd=None, yolo=True, thread_id=None, flags=None, backend=None)`
 
-Runs a Codex task with checker-driven retries. Subclass it and implement
+Runs an agent task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
 `None`/`""` when the task passes.
 If you do not override `check()`, the default verifier wrapper runs with the
@@ -266,7 +277,7 @@ Simple result object returned by `Task.__call__`.
 - `summary` (str): agent summary of what happened.
 - `iterations` (int): how many iterations were used.
 - `errors` (str | None): last checker error, if any.
-- `thread_id` (str | None): Codex thread id for the session.
+- `thread_id` (str | None): thread/session id for the session.
 
 ### `TaskFailed`
 
@@ -276,16 +287,17 @@ Exception raised by `task()` when iterations are exhausted.
 - `iterations` (int | None): iterations made when the task failed.
 - `errors` (str | None): last checker error, if any.
 
-### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None) -> ForeachResult`
+### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None, backend=None) -> ForeachResult`
 
 Runs a task file over a list of items, updating the list file in place.
 
 - `list_file` (str | PathLike): path to the list file to process.
 - `task_file` (str | PathLike): YAML task file (must include `prompt`).
 - `n` (int | None): limit parallelism to N (default: run all items in parallel).
-- `cwd` (str | PathLike | None): working directory for the Codex session.
-- `yolo` (bool): pass `--yolo` to Codex when true (defaults to true).
-- `flags` (str | None): extra CLI flags to pass to Codex.
+- `cwd` (str | PathLike | None): working directory for the agent session.
+- `yolo` (bool): pass `--yolo` when true (defaults to true).
+- `flags` (str | None): extra CLI flags to pass to the agent backend.
+- `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
 
 ### `ForeachResult(succeeded, failed, skipped, results)`
 
@@ -298,16 +310,29 @@ Simple result object returned by `foreach()`.
 
 ## Behavior notes
 
-- Uses `codex exec --json` and parses JSONL events for `agent_message` items.
-- Returns the last `agent_message` by default; set `include_thinking=True` to join all messages.
-- Automatically passes `--skip-git-repo-check` so it can run outside a git repo.
-- Passes `--yolo` by default (use `--no-yolo` or `yolo=False` for `--full-auto`).
-- Raises `RuntimeError` if Codex exits non-zero or returns no agent message.
+- Codex backend uses `codex exec --json` and parses JSONL `agent_message` items.
+- Codex backend passes `--skip-git-repo-check` so it can run outside a git repo.
+- Cursor backend uses `cursor agent --print --output-format json --trust` and parses the JSON result.
+- `include_thinking=True` only affects Codex; Cursor returns a single result string.
+- Passes `--yolo` by default (Codex uses `--full-auto` when disabled).
+- Raises `RuntimeError` if the backend exits non-zero or returns no agent message.
 
 ## Configuration
+
+Set the default backend:
+
+```bash
+export CODEXAPI_BACKEND=cursor
+```
 
 Set `CODEX_BIN` to point at a non-default Codex binary:
 
 ```bash
 export CODEX_BIN=/path/to/codex
+```
+
+Set `CURSOR_BIN` to point at a non-default Cursor binary:
+
+```bash
+export CURSOR_BIN=/path/to/cursor
 ```

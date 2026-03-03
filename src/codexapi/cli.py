@@ -33,7 +33,7 @@ _ROLL_OUT_PREFIX = "rollout-"
 _TASK_TEMPLATE = (
     "prompt: |\n"
     "  Main task prompt. Required. Use {{item}} for per-item values.\n"
-    "  Describe what Codex should do here.\n"
+    "  Describe what the agent should do here.\n"
     "\n"
     "set_up: |\n"
     "  Optional setup steps before the task runs.\n"
@@ -1040,45 +1040,50 @@ def main(argv=None):
         "  first non-empty line of its message.\n"
         "  Cancel by deleting .codexapi/ralph-loop.local.md or running codexapi ralph --cancel.\n"
         "  Default starts each iteration with a fresh Agent context; use --ralph-reuse\n"
-        "  to reuse a single Codex thread across iterations.\n"
+        "  to reuse a single thread across iterations.\n"
     )
     science_help = (
         "Science mode (science command):\n"
         "  Wraps your short task in a science prompt and runs it via the Ralph loop.\n"
-        "  Default uses --yolo. Use --no-yolo to run --full-auto instead.\n"
+        "  Default uses --yolo. Use --no-yolo to disable it.\n"
         "  Optional --max-duration stops before starting the next iteration once\n"
         "  the duration limit is reached (e.g. 90m, 2h, 45s; default unit is minutes).\n"
     )
     parser = argparse.ArgumentParser(
         prog="codexapi",
-        description="Run Codex via the codexapi wrapper.",
+        description="Run agent backends via the codexapi wrapper.",
     )
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Run a Codex prompt.",
+        help="Run an agent prompt.",
     )
     run_parser.add_argument(
         "prompt",
         nargs="?",
         help="Prompt to send. Use '-' or omit to read from stdin.",
     )
-    run_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    run_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    run_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     run_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     run_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
     run_parser.add_argument(
         "--include-thinking",
         action="store_true",
-        help="Return all agent messages joined together.",
+        help="Return all agent messages joined together (Codex only).",
     )
 
     lead_parser = subparsers.add_parser(
@@ -1100,7 +1105,12 @@ def main(argv=None):
         "--prompt-file",
         help="Read the lead prompt from a file.",
     )
-    lead_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    lead_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    lead_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     lead_parser.add_argument(
         "--leadbook",
         help="Path to the leadbook file (default: LEADBOOK.md in cwd).",
@@ -1114,15 +1124,15 @@ def main(argv=None):
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     lead_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
     run_parser.add_argument(
         "--thread-id",
-        help="Resume an existing Codex thread id.",
+        help="Resume an existing thread/session id.",
     )
     run_parser.add_argument(
         "--print-thread-id",
@@ -1185,16 +1195,21 @@ def main(argv=None):
             f"Defaults to {DEFAULT_MAX_ITERATIONS}."
         ),
     )
-    task_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    task_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    task_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     task_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     task_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
     task_parser.add_argument(
         "--quiet",
@@ -1248,16 +1263,21 @@ def main(argv=None):
         default=None,
         help="Reuse the same Agent context each iteration.",
     )
-    ralph_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    ralph_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    ralph_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     ralph_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     ralph_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
     science_parser = subparsers.add_parser(
@@ -1308,16 +1328,21 @@ def main(argv=None):
         default=None,
         help="Reuse the same Agent context each iteration.",
     )
-    science_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    science_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    science_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     science_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     science_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
     foreach_parser = subparsers.add_parser(
@@ -1348,16 +1373,21 @@ def main(argv=None):
         type=int,
         help="Limit parallelism to N.",
     )
-    foreach_parser.add_argument("--cwd", help="Working directory for the Codex session.")
+    foreach_parser.add_argument("--cwd", help="Working directory for the agent session.")
+    foreach_parser.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
     foreach_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
-        help="Disable --yolo and use --full-auto.",
+        help="Disable --yolo (Codex uses --full-auto).",
     )
     foreach_parser.add_argument(
         "--flags",
-        help="Additional raw CLI flags to pass to Codex (quoted as needed).",
+        help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
     create_parser = subparsers.add_parser(
@@ -1440,6 +1470,7 @@ def main(argv=None):
             args.cwd,
             args.yolo,
             args.flags,
+            args.backend,
         )
         if result.failed:
             raise SystemExit(1)
@@ -1509,6 +1540,7 @@ def main(argv=None):
                         args.cwd,
                         args.yolo,
                         args.flags,
+                        args.backend,
                     )
                 except TakeError as exc:
                     print(str(exc), file=sys.stderr)
@@ -1537,6 +1569,7 @@ def main(argv=None):
                     args.cwd,
                     args.yolo,
                     args.flags,
+                    args.backend,
                 )
             except TakeError as exc:
                 raise SystemExit(str(exc)) from None
@@ -1572,6 +1605,7 @@ def main(argv=None):
             yolo=args.yolo,
             thread_id=None,
             flags=args.flags,
+            backend=args.backend,
         )
         result = task_runner(progress=not args.quiet)
         if not result.success:
@@ -1605,6 +1639,7 @@ def main(argv=None):
             args.max_iterations,
             args.completion_promise,
             args.ralph_fresh,
+            args.backend,
         )()
         return
     if args.command == "science":
@@ -1620,6 +1655,7 @@ def main(argv=None):
             args.completion_promise,
             args.ralph_fresh,
             max_duration_seconds,
+            args.backend,
         )()
         return
     if args.command == "lead":
@@ -1629,7 +1665,15 @@ def main(argv=None):
             if args.no_leadbook and args.leadbook:
                 raise SystemExit("--leadbook and --no-leadbook are mutually exclusive.")
             leadbook = False if args.no_leadbook else args.leadbook
-            lead(args.minutes, prompt, args.cwd, args.yolo, args.flags, leadbook)
+            lead(
+                args.minutes,
+                prompt,
+                args.cwd,
+                args.yolo,
+                args.flags,
+                leadbook,
+                args.backend,
+            )
         except KeyboardInterrupt:
             raise SystemExit(130)
         except Exception as exc:
@@ -1664,6 +1708,7 @@ def main(argv=None):
                 args.yolo,
                 args.flags,
                 not args.quiet,
+                backend=args.backend,
             )
         except TaskFailed as exc:
             exit_code = 1
@@ -1676,13 +1721,19 @@ def main(argv=None):
                 args.thread_id,
                 args.flags,
                 include_thinking=args.include_thinking,
+                backend=args.backend,
             )
             message = session(prompt)
             if args.print_thread_id:
                 print(f"thread_id={session.thread_id}", file=sys.stderr)
         else:
             message = agent(
-                prompt, args.cwd, args.yolo, args.flags, args.include_thinking
+                prompt,
+                args.cwd,
+                args.yolo,
+                args.flags,
+                args.include_thinking,
+                args.backend,
             )
 
     if message is not None:
