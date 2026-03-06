@@ -135,6 +135,7 @@ def start_agent(
     cwd = _resolve_cwd(cwd)
     session = {
         "thread_id": "",
+        "rollout_path": "",
         "backend": backend or os.environ.get("CODEXAPI_BACKEND", "codex"),
         "yolo": bool(yolo),
         "flags": flags or "",
@@ -500,6 +501,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
             if message.get("text")
         ]
         session["thread_id"] = outcome.get("thread_id") or session.get("thread_id") or ""
+        session["rollout_path"] = outcome.get("rollout_path") or session.get("rollout_path") or ""
         session["pending_messages"] = []
         usage = _normalize_usage(outcome.get("usage"))
         _add_usage(meta, state, usage, ended)
@@ -554,6 +556,7 @@ def _run_agent_turn(meta, session, prompt, runner=None):
         if not isinstance(outcome, dict):
             raise TypeError("runner must return a dict")
         return outcome
+    started = utc_now()
     worker = Agent(
         session.get("cwd") or meta.get("cwd"),
         session.get("yolo", True),
@@ -564,10 +567,21 @@ def _run_agent_turn(meta, session, prompt, runner=None):
         env=session.get("env") or None,
     )
     message = worker(prompt)
+    usage = worker.last_usage or {}
+    rollout_path = ""
+    if (session.get("backend") or "codex") == "codex":
+        rollout_usage, rollout_path = _codex_rollout_usage(
+            session,
+            worker.thread_id or session.get("thread_id") or "",
+            started,
+        )
+        if rollout_usage:
+            usage = rollout_usage
     return {
         "message": message,
         "thread_id": worker.thread_id or "",
-        "usage": worker.last_usage or {},
+        "usage": usage,
+        "rollout_path": rollout_path,
     }
 
 
@@ -1082,6 +1096,76 @@ def _queued_send_commands(agent_dir):
         if payload.get("kind") == "send":
             queued.append(payload)
     return queued
+
+
+def _codex_rollout_usage(session, thread_id, started_at):
+    """Return usage from the current Codex rollout plus its resolved path."""
+    if not thread_id:
+        return {}, ""
+    rollout_path = _resolve_rollout_path(session.get("rollout_path"), thread_id)
+    if rollout_path is None:
+        return {}, ""
+    usage = _extract_rollout_usage(rollout_path, started_at)
+    if not usage:
+        return {}, str(rollout_path)
+    return usage, str(rollout_path)
+
+
+def _resolve_rollout_path(known_path, thread_id):
+    """Return the rollout file for a thread, preferring the cached session path."""
+    if known_path:
+        path = Path(known_path)
+        if path.exists() and thread_id in path.name:
+            return path
+    root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+    if not root.exists():
+        return None
+    candidates = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if not name.startswith("rollout-") or not name.endswith(".jsonl"):
+                continue
+            if thread_id not in name:
+                continue
+            path = Path(dirpath) / name
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, path))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
+def _extract_rollout_usage(path, started_at):
+    """Return the latest per-turn token usage written after this wake started."""
+    latest = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if '"token_count"' not in line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "event_msg":
+                    continue
+                payload = event.get("payload") or {}
+                if payload.get("type") != "token_count":
+                    continue
+                timestamp = parse_utc(event.get("timestamp"))
+                if timestamp is not None and timestamp < started_at:
+                    continue
+                info = payload.get("info") or {}
+                usage = _normalize_usage(info.get("last_token_usage"))
+                if usage:
+                    latest = usage
+    except OSError:
+        return {}
+    return latest
 
 
 def _cron_tag(home, hostname):

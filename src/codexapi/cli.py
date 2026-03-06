@@ -147,17 +147,20 @@ def _print_managed_agent_list(items):
     if not items:
         print("No agents.")
         return
-    print("ID       STAT     HOST            UNREAD TOKENS  TOK/H   NAME")
+    print("ID       STAT     POL  HOST         UNR TOKENS  TOK/H   NEXT REPO         NAME")
     for item in items:
         ident = item["id"][:8]
         status = _truncate_head(item["status"] or "-", 8)
-        host = _truncate_head(item["hostname"] or "-", 15)
+        policy = _truncate_head(_policy_label(item.get("stop_policy")), 4)
+        host = _truncate_head(item["hostname"] or "-", 12)
         unread = str(item["unread_message_count"])
         tokens = _format_token_total(item["total_tokens"])
         tok_h = _format_token_rate(item.get("avg_tokens_per_hour"))
+        next_wake = _truncate_head(_next_wake_label(item), 6)
+        repo = _truncate_head(_repo_label(item.get("cwd")), 12)
         name = item["name"]
         print(
-            f"{ident:<8} {status:<8} {host:<15} {unread:>6} {tokens:>6} {tok_h:>7}  {name}"
+            f"{ident:<8} {status:<8} {policy:<4} {host:<12} {unread:>3} {tokens:>6} {tok_h:>7} {next_wake:>6} {repo:<12} {name}"
         )
 
 
@@ -177,6 +180,42 @@ def _print_managed_agent_read(result):
             print(f"[{stamp}] {kind}:")
         print(item.get("text") or "")
         print()
+
+
+def _print_managed_agent_show(result):
+    meta = result["meta"]
+    state = result["state"]
+    print(f"{meta['name']} [{state.get('status') or '-'}]")
+    print(f"ID: {meta['id']}")
+    print(f"Host: {meta['hostname']}")
+    print(f"Created: {meta['created_at']} by {meta['created_by']}")
+    print(
+        f"Policy: {meta['stop_policy']}  Heartbeat: {meta['heartbeat_minutes']}m  Unread: {result['unread_message_count']}"
+    )
+    print(f"CWD: {meta['cwd']}")
+    print(f"Thread: {state.get('thread_id') or '-'}")
+    print(
+        "Tokens: "
+        f"{_format_token_total(state.get('total_tokens'))} total "
+        f"({_format_token_total(state.get('input_tokens'))} in, "
+        f"{_format_token_total(state.get('output_tokens'))} out, "
+        f"{_format_token_rate(state.get('avg_tokens_per_hour'))}/h)"
+    )
+    print(f"Activity: {_state_text(state.get('activity'))}")
+    print(f"Reply: {_state_text(state.get('reply'))}")
+    print(f"Last error: {_state_text(state.get('last_error'))}")
+    print(f"Last wake: {_state_time(state.get('last_wake_at'))}")
+    print(f"Last success: {_state_time(state.get('last_success_at'))}")
+    print(f"Next wake: {_state_time(state.get('next_wake_at'))}")
+    print(f"Wake requested: {_state_time(state.get('wake_requested_at'))}")
+    print(f"Prompt: {_truncate_head(_single_line(meta.get('prompt') or ''), 160) or '-'}")
+    recent_runs = result.get("recent_runs") or []
+    if not recent_runs:
+        return
+    print()
+    print("Recent runs:")
+    for run in recent_runs:
+        print(_format_managed_agent_run(run))
 
 
 
@@ -216,6 +255,81 @@ def _truncate_tail(text, limit):
     if limit <= 3:
         return text[-limit:]
     return "..." + text[-(limit - 3) :]
+
+
+def _repo_label(cwd):
+    if not isinstance(cwd, str) or not cwd:
+        return "-"
+    name = Path(cwd).name
+    return name or cwd
+
+
+def _policy_label(stop_policy):
+    if stop_policy == "until_done":
+        return "done"
+    if stop_policy == "until_stopped":
+        return "loop"
+    return "-"
+
+
+def _next_wake_label(item):
+    status = item.get("status") or ""
+    if status in ("done", "canceled"):
+        return "-"
+    if status == "paused":
+        return "paused"
+    if item.get("wake_requested_at"):
+        return "wake"
+    next_wake = _parse_timestamp(item.get("next_wake_at"))
+    if next_wake is None:
+        return "-"
+    now = datetime.now()
+    if next_wake <= now:
+        return "due"
+    return _short_duration((next_wake - now).total_seconds())
+
+
+def _short_duration(seconds):
+    if seconds <= 0:
+        return "due"
+    total = int(seconds)
+    days, rem = divmod(total, 86400)
+    if days:
+        return f"{days}d"
+    hours, rem = divmod(rem, 3600)
+    if hours:
+        return f"{hours}h"
+    minutes, secs = divmod(rem, 60)
+    if minutes:
+        return f"{minutes}m"
+    return f"{secs}s"
+
+
+def _state_text(value):
+    text = _single_line(str(value or ""))
+    return text or "-"
+
+
+def _state_time(value):
+    return value or "-"
+
+
+def _format_managed_agent_run(run):
+    started = run.get("started_at") or "-"
+    reason = run.get("wake_reason") or "-"
+    usage = run.get("usage") or {}
+    tokens = _format_token_total(usage.get("total_tokens"))
+    status = run.get("error") or run.get("status") or "-"
+    reply = run.get("reply") or ""
+    message_count = len(run.get("messages") or [])
+    parts = [started, reason, tokens]
+    if message_count:
+        parts.append(f"msgs={message_count}")
+    summary = _truncate_head(_single_line(status), 60)
+    if reply:
+        summary = _truncate_head(f"{summary} | {_single_line(reply)}", 100)
+    parts.append(summary)
+    return "- " + "  ".join(parts)
 
 
 def _parse_timestamp(value):
@@ -1629,7 +1743,7 @@ def main(argv=None):
             _print_managed_agent_list(list_managed_agents())
             return
         if args.agent_command == "show":
-            print(json.dumps(show_managed_agent(args.agent_ref), indent=2, sort_keys=True))
+            _print_managed_agent_show(show_managed_agent(args.agent_ref))
             return
         if args.agent_command == "read":
             if args.limit < 1:

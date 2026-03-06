@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -11,11 +13,13 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codexapi.agents import (
+    _codex_rollout_usage,
     _tick_lock_path,
     _try_lock,
     _remove_cron_line,
     _upsert_cron_line,
     control_agent,
+    format_utc,
     install_cron,
     nudge_agent,
     read_agent,
@@ -27,6 +31,7 @@ from codexapi.agents import (
     uninstall_cron,
     write_tick_wrapper,
 )
+from codexapi.cli import _print_managed_agent_list, _print_managed_agent_show
 
 
 @contextmanager
@@ -300,6 +305,217 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(shown["state"]["avg_tokens_per_hour"], 50.0)
             self.assertEqual(shown["state"]["reply"], "Message handled.")
             self.assertEqual(shown["unread_message_count"], 0)
+
+    def test_codex_rollout_usage_uses_latest_event_after_start(self):
+        started = datetime(2026, 3, 6, 8, 0, 5, tzinfo=timezone.utc)
+        with _temp_home() as home:
+            codex_home = home / "codex-home"
+            rollout = (
+                codex_home
+                / "sessions"
+                / "2026"
+                / "03"
+                / "06"
+                / "rollout-2026-03-06T09-00-00-thread-rollout.jsonl"
+            )
+            rollout.parent.mkdir(parents=True, exist_ok=True)
+            events = [
+                {
+                    "timestamp": "2026-03-06T08:00:01Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 10,
+                                "output_tokens": 5,
+                                "total_tokens": 15,
+                            }
+                        },
+                    },
+                },
+                {
+                    "timestamp": "2026-03-06T08:00:06Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 20,
+                                "output_tokens": 10,
+                                "total_tokens": 30,
+                            }
+                        },
+                    },
+                },
+                {
+                    "timestamp": "2026-03-06T08:00:07Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 40,
+                                "output_tokens": 12,
+                                "total_tokens": 52,
+                            }
+                        },
+                    },
+                },
+            ]
+            rollout.write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False):
+                usage, path = _codex_rollout_usage(
+                    {"rollout_path": str(rollout)},
+                    "thread-rollout",
+                    started,
+                )
+            self.assertEqual(path, str(rollout))
+            self.assertEqual(
+                usage,
+                {"input_tokens": 40, "output_tokens": 12, "total_tokens": 52},
+            )
+
+    def test_nudge_agent_reads_usage_from_codex_rollout(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=1)
+
+        with _temp_home() as home:
+            codex_home = home / "codex-home"
+
+            class FakeAgent:
+                def __init__(
+                    self,
+                    cwd=None,
+                    yolo=True,
+                    thread_id=None,
+                    flags=None,
+                    include_thinking=False,
+                    backend=None,
+                    env=None,
+                ):
+                    self.thread_id = thread_id
+                    self.last_usage = {}
+
+                def __call__(self, prompt):
+                    self.thread_id = "thread-rollout"
+                    rollout = (
+                        codex_home
+                        / "sessions"
+                        / "2026"
+                        / "03"
+                        / "06"
+                        / "rollout-2026-03-06T09-00-00-thread-rollout.jsonl"
+                    )
+                    rollout.parent.mkdir(parents=True, exist_ok=True)
+                    events = [
+                        {
+                            "timestamp": format_utc(start + timedelta(seconds=5)),
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "token_count",
+                                "info": {
+                                    "last_token_usage": {
+                                        "input_tokens": 40,
+                                        "output_tokens": 10,
+                                        "total_tokens": 50,
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                    rollout.write_text(
+                        "\n".join(json.dumps(event) for event in events) + "\n",
+                        encoding="utf-8",
+                    )
+                    return json.dumps(
+                        {
+                            "status": "Handled from rollout",
+                            "continue": False,
+                            "reply": "Used rollout tokens.",
+                        }
+                    )
+
+            agent = start_agent(
+                "Handle with real rollout accounting.",
+                hostname="host-a",
+                now=start,
+            )
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False):
+                with patch("codexapi.agents.Agent", FakeAgent):
+                    with patch("codexapi.agents.utc_now", side_effect=[start, end]):
+                        result = nudge_agent(
+                            agent["id"],
+                            hostname="host-a",
+                            now=start,
+                        )
+            self.assertTrue(result["ran"])
+            self.assertEqual(result["woken"], 1)
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["thread_id"], "thread-rollout")
+            self.assertEqual(shown["state"]["input_tokens"], 40)
+            self.assertEqual(shown["state"]["output_tokens"], 10)
+            self.assertEqual(shown["state"]["total_tokens"], 50)
+            self.assertEqual(shown["state"]["avg_tokens_per_hour"], 50.0)
+            self.assertEqual(shown["state"]["reply"], "Used rollout tokens.")
+            self.assertIn("thread-rollout", shown["session"]["rollout_path"])
+
+    def test_cli_managed_agent_views_show_operator_fields(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=1)
+
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Handled",
+                        "continue": True,
+                        "reply": "Message handled.",
+                    }
+                ),
+                "thread_id": "thread-usage",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "total_tokens": 50,
+                },
+            }
+
+        with _temp_home():
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+                now=start,
+            )
+            send_agent(agent["id"], "ping", hostname="host-a", now=start)
+            with patch("codexapi.agents.utc_now", return_value=end):
+                nudge_agent(
+                    agent["id"],
+                    hostname="host-a",
+                    now=start + timedelta(seconds=10),
+                    runner=fake_runner,
+                )
+            shown = show_agent(agent["id"])
+            list_out = io.StringIO()
+            with redirect_stdout(list_out):
+                _print_managed_agent_list([shown])
+            self.assertIn("POL", list_out.getvalue())
+            self.assertIn("REPO", list_out.getvalue())
+            self.assertIn("done", list_out.getvalue())
+            self.assertIn("codexapi", list_out.getvalue())
+
+            show_out = io.StringIO()
+            with redirect_stdout(show_out):
+                _print_managed_agent_show(shown)
+            text = show_out.getvalue()
+            self.assertIn("Policy: until_done", text)
+            self.assertIn("Tokens: 50 total (30 in, 20 out, 50.0/h)", text)
+            self.assertIn("Prompt: Handle messages.", text)
+            self.assertIn("Recent runs:", text)
+            self.assertIn("msgs=1", text)
 
 
 if __name__ == "__main__":
