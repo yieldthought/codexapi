@@ -206,6 +206,7 @@ def show_agent(agent_ref, home=None):
     snapshot = _snapshot(agent_dir)
     snapshot["meta"] = _read_json(agent_dir / "meta.json")
     snapshot["state"] = _read_json(agent_dir / "state.json")
+    snapshot["state"]["unread_message_count"] = snapshot["unread_message_count"]
     snapshot["session"] = _read_session(agent_dir)
     snapshot["recent_runs"] = _recent_runs(agent_dir, 5)
     return snapshot
@@ -218,6 +219,16 @@ def read_agent(agent_ref, limit=10, home=None):
     state = _read_json(agent_dir / "state.json")
     session = _read_session(agent_dir)
     items = []
+    for queued in _queued_send_commands(agent_dir):
+        text = queued.get("body") or ""
+        if text:
+            items.append(
+                {
+                    "kind": "queued",
+                    "timestamp": queued.get("created_at") or "",
+                    "text": text,
+                }
+            )
     for run in _recent_runs(agent_dir, limit):
         reply = run.get("reply") or ""
         if reply:
@@ -682,6 +693,9 @@ def _queue_command(agent_ref, kind, body, author, home, hostname, now):
 def _snapshot(agent_dir):
     meta = _read_json(agent_dir / "meta.json")
     state = _read_json(agent_dir / "state.json")
+    unread = int(state.get("unread_message_count") or 0) + len(
+        _queued_send_commands(agent_dir)
+    )
     return {
         "id": meta["id"],
         "name": meta["name"],
@@ -697,7 +711,7 @@ def _snapshot(agent_dir):
         "last_success_at": state.get("last_success_at") or "",
         "next_wake_at": state.get("next_wake_at") or "",
         "wake_requested_at": state.get("wake_requested_at") or "",
-        "unread_message_count": int(state.get("unread_message_count") or 0),
+        "unread_message_count": unread,
         "input_tokens": int(state.get("input_tokens") or 0),
         "output_tokens": int(state.get("output_tokens") or 0),
         "total_tokens": int(state.get("total_tokens") or 0),
@@ -916,6 +930,23 @@ def _wake_reason(state, commands):
     if not reasons:
         reasons.append("heartbeat")
     return ",".join(sorted(set(reasons)))
+
+
+def _queued_send_commands(agent_dir):
+    queued = []
+    new_dir = agent_dir / "commands" / "new"
+    if not new_dir.exists():
+        return queued
+    for path in sorted(new_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file() or path.suffix != ".json":
+            continue
+        try:
+            payload = _read_json(path)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+        if payload.get("kind") == "send":
+            queued.append(payload)
+    return queued
 
 
 def _cron_tag(home, hostname):

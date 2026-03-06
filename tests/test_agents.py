@@ -65,6 +65,13 @@ class AgentsTests(unittest.TestCase):
             agent = start_agent("Handle background work.", hostname="host-a")
             send_agent(agent["id"], "status", author="mark", hostname="host-b")
 
+            before = show_agent(agent["id"])
+            self.assertEqual(before["unread_message_count"], 1)
+            self.assertEqual(before["state"]["unread_message_count"], 1)
+            queued = read_agent(agent["id"])
+            self.assertEqual(queued["items"][0]["kind"], "queued")
+            self.assertEqual(queued["items"][0]["text"], "status")
+
             other_host = tick(hostname="host-b", runner=fake_runner)
             self.assertTrue(other_host["ran"])
             self.assertEqual(other_host["processed"], 0)
