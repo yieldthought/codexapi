@@ -17,6 +17,7 @@ from .agents import (
     control_agent,
     install_cron as install_agent_cron,
     list_agents as list_managed_agents,
+    nudge_agent,
     read_agent as read_managed_agent,
     send_agent,
     show_agent as show_managed_agent,
@@ -1605,6 +1606,7 @@ def main(argv=None):
             return
         if args.agent_command == "send":
             result = send_agent(args.agent_ref, args.message, args.author)
+            result["nudge"] = nudge_agent(args.agent_ref)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command in ("wake", "pause", "resume", "cancel"):
@@ -1613,6 +1615,7 @@ def main(argv=None):
                 args.agent_command,
                 args.author,
             )
+            result["nudge"] = nudge_agent(args.agent_ref)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command == "tick":

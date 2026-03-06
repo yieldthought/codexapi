@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from codexapi.agents import (
     _upsert_cron_line,
     control_agent,
     install_cron,
+    nudge_agent,
     read_agent,
     render_cron_line,
     send_agent,
@@ -184,6 +186,52 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(len(writes), 1)
             self.assertIn(str(wrapper), writes[0])
             self.assertIn("codexapi-agent::host-a::", writes[0])
+
+    def test_nudge_agent_runs_immediately_and_updates_token_totals(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=1)
+
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Handled",
+                        "continue": True,
+                        "reply": "Message handled.",
+                    }
+                ),
+                "thread_id": "thread-usage",
+                "usage": {
+                    "input_tokens": 30,
+                    "output_tokens": 20,
+                    "total_tokens": 50,
+                },
+            }
+
+        with _temp_home():
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+                now=start,
+            )
+            send_agent(agent["id"], "ping", hostname="host-a", now=start)
+            with patch("codexapi.agents.utc_now", return_value=end):
+                result = nudge_agent(
+                    agent["id"],
+                    hostname="host-a",
+                    now=start + timedelta(seconds=10),
+                    runner=fake_runner,
+                )
+            self.assertTrue(result["ran"])
+            self.assertEqual(result["woken"], 1)
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["thread_id"], "thread-usage")
+            self.assertEqual(shown["state"]["input_tokens"], 30)
+            self.assertEqual(shown["state"]["output_tokens"], 20)
+            self.assertEqual(shown["state"]["total_tokens"], 50)
+            self.assertEqual(shown["state"]["avg_tokens_per_hour"], 50.0)
+            self.assertEqual(shown["state"]["reply"], "Message handled.")
+            self.assertEqual(shown["unread_message_count"], 0)
 
 
 if __name__ == "__main__":

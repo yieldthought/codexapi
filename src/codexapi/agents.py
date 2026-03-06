@@ -280,6 +280,22 @@ def control_agent(agent_ref, kind, author=None, home=None, hostname=None, now=No
     return _queue_command(agent_ref, kind, "", author, home, hostname, now)
 
 
+def nudge_agent(agent_ref, home=None, hostname=None, now=None, runner=None):
+    """Attempt an immediate wake for one locally-owned agent."""
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    meta = _read_json(agent_dir / "meta.json")
+    host = hostname or current_hostname()
+    if meta["hostname"] != host:
+        return {"ran": False, "reason": "remote", "processed": 0, "woken": 0}
+    outcome = _tick_agent(agent_dir, now or utc_now(), runner)
+    return {
+        "ran": True,
+        "reason": "local",
+        "processed": 1 if outcome["processed"] else 0,
+        "woken": 1 if outcome["woken"] else 0,
+    }
+
+
 def tick(home=None, hostname=None, now=None, runner=None):
     """Process due agents for the current host."""
     home = _resolve_home(home)
@@ -431,6 +447,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         "notify": "",
         "error": "",
         "continue": True,
+        "usage": {},
     }
     try:
         outcome = _run_agent_turn(meta, session, prompt, runner)
@@ -438,6 +455,8 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         ended = utc_now()
         session["thread_id"] = outcome.get("thread_id") or session.get("thread_id") or ""
         session["pending_messages"] = []
+        usage = _normalize_usage(outcome.get("usage"))
+        _add_usage(meta, state, usage, ended)
         state["reply"] = response["reply"]
         state["last_success_at"] = format_utc(ended)
         state["last_error"] = ""
@@ -460,6 +479,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         run["reply"] = response["reply"]
         run["notify"] = response["notify"]
         run["continue"] = bool(response["continue"])
+        run["usage"] = usage
         _write_run(agent_dir, meta["hostname"], run)
         if response["notify"]:
             title = f"Agent: {meta['name']}"
@@ -483,7 +503,10 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
 
 def _run_agent_turn(meta, session, prompt, runner=None):
     if runner is not None:
-        return runner(meta, session, prompt)
+        outcome = runner(meta, session, prompt)
+        if not isinstance(outcome, dict):
+            raise TypeError("runner must return a dict")
+        return outcome
     worker = Agent(
         session.get("cwd") or meta.get("cwd"),
         session.get("yolo", True),
@@ -494,7 +517,11 @@ def _run_agent_turn(meta, session, prompt, runner=None):
         env=session.get("env") or None,
     )
     message = worker(prompt)
-    return {"message": message, "thread_id": worker.thread_id or ""}
+    return {
+        "message": message,
+        "thread_id": worker.thread_id or "",
+        "usage": worker.last_usage or {},
+    }
 
 
 def _parse_agent_response(output):
@@ -930,6 +957,67 @@ def _wake_reason(state, commands):
     if not reasons:
         reasons.append("heartbeat")
     return ",".join(sorted(set(reasons)))
+
+
+def _normalize_usage(usage):
+    """Normalize usage dicts for state accounting."""
+    if not isinstance(usage, dict):
+        return {}
+    input_tokens = _usage_int(usage.get("input_tokens"))
+    output_tokens = _usage_int(usage.get("output_tokens"))
+    total_tokens = _usage_int(usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    normalized = {}
+    if input_tokens is not None:
+        normalized["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        normalized["output_tokens"] = output_tokens
+    if total_tokens is not None:
+        normalized["total_tokens"] = total_tokens
+    return normalized
+
+
+def _add_usage(meta, state, usage, now):
+    """Accumulate token usage totals and refresh the running average."""
+    if not usage:
+        return
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    total_tokens = usage.get("total_tokens")
+    if input_tokens is not None:
+        state["input_tokens"] = int(state.get("input_tokens") or 0) + input_tokens
+    if output_tokens is not None:
+        state["output_tokens"] = int(state.get("output_tokens") or 0) + output_tokens
+    if total_tokens is None:
+        total_tokens = 0
+        if input_tokens is not None:
+            total_tokens += input_tokens
+        if output_tokens is not None:
+            total_tokens += output_tokens
+    state["total_tokens"] = int(state.get("total_tokens") or 0) + total_tokens
+    created_at = parse_utc(meta.get("created_at"))
+    if created_at is None:
+        return
+    elapsed = (now - created_at).total_seconds()
+    if elapsed <= 0:
+        elapsed = 1
+    state["avg_tokens_per_hour"] = round(state["total_tokens"] * 3600.0 / elapsed, 2)
+
+
+def _usage_int(value):
+    """Return an integer-like usage value or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
 
 
 def _queued_send_commands(agent_dir):

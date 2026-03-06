@@ -47,7 +47,7 @@ def agent(
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
-    message, _thread_id = _run_agent(
+    message, _thread_id, _usage = _run_agent(
         prompt, cwd, None, yolo, flags, include_thinking, backend, env
     )
     return message
@@ -103,12 +103,13 @@ class Agent:
         self.thread_id = thread_id
         self._backend = backend
         self._env = env
+        self.last_usage = {}
 
     def __call__(self, prompt):
         """Send a prompt to the agent backend and return the message."""
         if self._welfare:
             prompt = welfare.append_instructions(prompt)
-        message, thread_id = _run_agent(
+        message, thread_id, usage = _run_agent(
             prompt,
             self.cwd,
             self.thread_id,
@@ -120,6 +121,7 @@ class Agent:
         )
         if thread_id:
             self.thread_id = thread_id
+        self.last_usage = usage or {}
         if self._welfare and welfare.stop_requested(message):
             raise WelfareStop(message)
         return message
@@ -213,6 +215,7 @@ def _parse_jsonl(output, include_thinking):
     thread_id = None
     messages = []
     raw_lines = []
+    usage = {}
 
     for line in output.splitlines():
         line = line.strip()
@@ -229,6 +232,10 @@ def _parse_jsonl(output, include_thinking):
             if isinstance(maybe_thread, str):
                 thread_id = maybe_thread
 
+        maybe_usage = _event_usage(event)
+        if maybe_usage:
+            usage = maybe_usage
+
         if event.get("type") == "item.completed":
             item = event.get("item") or {}
             if item.get("type") == "agent_message":
@@ -243,8 +250,8 @@ def _parse_jsonl(output, include_thinking):
         )
 
     if include_thinking:
-        return "\n\n".join(messages), thread_id
-    return messages[-1], thread_id
+        return "\n\n".join(messages), thread_id, usage
+    return messages[-1], thread_id, usage
 
 
 def _parse_cursor_json(output, include_thinking):
@@ -292,7 +299,7 @@ def _parse_cursor_json(output, include_thinking):
     session_id = payload.get("session_id")
     if not isinstance(session_id, str):
         session_id = None
-    return result, session_id
+    return result, session_id, {}
 
 
 def _merged_env(env):
@@ -308,3 +315,75 @@ def _merged_env(env):
         else:
             merged[str(key)] = str(value)
     return merged
+
+
+def _event_usage(event):
+    """Extract per-call token usage from a backend event when present."""
+    if not isinstance(event, dict):
+        return {}
+    event_type = event.get("type")
+    payload = None
+    if event_type == "event_msg":
+        payload = event.get("payload") or {}
+        if payload.get("type") != "token_count":
+            return {}
+        info = payload.get("info") or {}
+        usage = info.get("last_token_usage")
+        if isinstance(usage, dict):
+            return _normalize_usage(usage)
+        usage = info.get("total_token_usage")
+        if isinstance(usage, dict):
+            return _normalize_usage(usage)
+        return {}
+    if event_type == "token_count":
+        payload = event.get("info") or event.get("payload") or {}
+        usage = payload.get("last_token_usage")
+        if isinstance(usage, dict):
+            return _normalize_usage(usage)
+        usage = payload.get("total_token_usage")
+        if isinstance(usage, dict):
+            return _normalize_usage(usage)
+    return {}
+
+
+def _normalize_usage(usage):
+    """Normalize token usage dicts to input/output/total ints."""
+    if not isinstance(usage, dict):
+        return {}
+    input_tokens = _usage_int(
+        usage.get("input_tokens"),
+        usage.get("prompt_tokens"),
+        usage.get("input"),
+    )
+    output_tokens = _usage_int(
+        usage.get("output_tokens"),
+        usage.get("completion_tokens"),
+        usage.get("output"),
+    )
+    total_tokens = _usage_int(usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    normalized = {}
+    if input_tokens is not None:
+        normalized["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        normalized["output_tokens"] = output_tokens
+    if total_tokens is not None:
+        normalized["total_tokens"] = total_tokens
+    return normalized
+
+
+def _usage_int(*values):
+    """Return the first integer-like usage value from the given candidates."""
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if text.isdigit():
+                return int(text)
+    return None
