@@ -105,6 +105,7 @@ Each agent stores at least:
 - `name`: human-readable unique name within the home
 - `created_at`: UTC timestamp
 - `created_by`: user name or parent agent name
+- `parent_id`: parent agent id, if any
 - `hostname`: owning host for execution
 - `cwd`: working directory
 - `prompt`: original instruction text
@@ -196,7 +197,7 @@ Why it exists:
 - Separates mostly-static configuration from rapidly changing state.
 
 Suggested contents:
-- `id`, `name`, `created_at`, `created_by`, `hostname`, `cwd`, `prompt`,
+- `id`, `name`, `created_at`, `created_by`, `parent_id`, `hostname`, `cwd`, `prompt`,
   `stop_policy`, `heartbeat_minutes`
 
 ### `agents/<agent_id>/state.json`
@@ -600,6 +601,18 @@ Why this matters:
 
 V1 should store only the minimum needed to recreate the expected environment.
 
+Managed wakes should also expose stable agent identity to the backend process:
+
+- `CODEXAPI_AGENT_ID`
+- `CODEXAPI_AGENT_NAME`
+- `CODEXAPI_AGENT_PARENT_ID`, when relevant
+
+Why this matters:
+
+- a managed agent should be able to start another agent without manually
+  re-stating its own identity
+- child agents should be able to record parentage automatically
+
 ## Token Accounting
 
 V1 should not pretend to know dollar cost.
@@ -627,6 +640,7 @@ V1 CLI surface:
 
 - `codexapi agent start`
 - `codexapi agent list`
+- `codexapi agent whoami`
 - `codexapi agent read`
 - `codexapi agent show`
 - `codexapi agent send`
@@ -641,6 +655,7 @@ Expected behavior:
 
 - `start` creates the agent directory, meta/state files, and host runtime files
 - `list` reads only this `CODEXAPI_HOME`
+- `whoami` prints the effective host identity and `CODEXAPI_HOME`
 - `read` shows recent user-visible communication derived from state and run
   records
 - `show` reads one agent's current snapshot and recent run history

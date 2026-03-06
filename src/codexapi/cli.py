@@ -14,7 +14,9 @@ from pathlib import Path
 
 from .agent import Agent, agent
 from .agents import (
+    codexapi_home,
     control_agent,
+    current_hostname,
     install_cron as install_agent_cron,
     list_agents as list_managed_agents,
     nudge_agent,
@@ -182,6 +184,13 @@ def _print_managed_agent_read(result):
         print()
 
 
+def _print_managed_agent_identity():
+    override = os.environ.get("CODEXAPI_HOSTNAME", "").strip()
+    print(f"Host: {current_hostname()}")
+    print(f"Host override: {override or '-'}")
+    print(f"Home: {codexapi_home()}")
+
+
 def _print_managed_agent_show(result):
     meta = result["meta"]
     state = result["state"]
@@ -189,6 +198,8 @@ def _print_managed_agent_show(result):
     print(f"ID: {meta['id']}")
     print(f"Host: {meta['hostname']}")
     print(f"Created: {meta['created_at']} by {meta['created_by']}")
+    print(f"Parent: {_related_label(result.get('parent'))}")
+    print(f"Children: {_children_label(result.get('children'))}")
     print(
         f"Policy: {meta['stop_policy']}  Heartbeat: {meta['heartbeat_minutes']}m  Unread: {result['unread_message_count']}"
     )
@@ -330,6 +341,24 @@ def _format_managed_agent_run(run):
         summary = _truncate_head(f"{summary} | {_single_line(reply)}", 100)
     parts.append(summary)
     return "- " + "  ".join(parts)
+
+
+def _related_label(agent):
+    if not agent:
+        return "-"
+    ident = agent.get("id", "")[:8]
+    name = agent.get("name") or ident or "-"
+    status = agent.get("status") or "-"
+    return f"{name} [{status}] {ident}"
+
+
+def _children_label(children):
+    if not children:
+        return "-"
+    labels = [_related_label(child) for child in children[:3]]
+    if len(children) > 3:
+        labels.append(f"+{len(children) - 3} more")
+    return ", ".join(labels)
 
 
 def _parse_timestamp(value):
@@ -1344,6 +1373,10 @@ def main(argv=None):
         help="Creator label (defaults to $USER).",
     )
     agent_start.add_argument(
+        "--parent",
+        help="Optional parent agent id, unique prefix, or name.",
+    )
+    agent_start.add_argument(
         "--stop-policy",
         default="until_done",
         choices=("until_done", "until_stopped"),
@@ -1374,6 +1407,10 @@ def main(argv=None):
     agent_subparsers.add_parser(
         "list",
         help="List durable agents in this CODEXAPI_HOME.",
+    )
+    agent_subparsers.add_parser(
+        "whoami",
+        help="Show the effective host and CODEXAPI_HOME for agents.",
     )
 
     agent_show = agent_subparsers.add_parser(
@@ -1731,6 +1768,7 @@ def main(argv=None):
                 args.cwd,
                 args.name,
                 args.created_by,
+                args.parent,
                 args.stop_policy,
                 args.heartbeat_minutes,
                 args.backend,
@@ -1741,6 +1779,9 @@ def main(argv=None):
             return
         if args.agent_command == "list":
             _print_managed_agent_list(list_managed_agents())
+            return
+        if args.agent_command == "whoami":
+            _print_managed_agent_identity()
             return
         if args.agent_command == "show":
             _print_managed_agent_show(show_managed_agent(args.agent_ref))

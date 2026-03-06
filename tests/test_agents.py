@@ -31,7 +31,11 @@ from codexapi.agents import (
     uninstall_cron,
     write_tick_wrapper,
 )
-from codexapi.cli import _print_managed_agent_list, _print_managed_agent_show
+from codexapi.cli import (
+    _print_managed_agent_identity,
+    _print_managed_agent_list,
+    _print_managed_agent_show,
+)
 
 
 @contextmanager
@@ -47,6 +51,17 @@ class AgentsTests(unittest.TestCase):
             from codexapi.agents import current_hostname
 
             self.assertEqual(current_hostname(), "stable-host")
+
+    def test_cli_whoami_shows_effective_host_and_home(self):
+        with _temp_home() as home:
+            with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "stable-host"}, clear=False):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    _print_managed_agent_identity()
+        text = output.getvalue()
+        self.assertIn("Host: stable-host", text)
+        self.assertIn("Host override: stable-host", text)
+        self.assertIn(f"Home: {home.resolve()}", text)
 
     def test_homes_are_isolated(self):
         with _temp_home() as home_a:
@@ -110,6 +125,93 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(conversation["items"][0]["text"], "status")
             self.assertEqual(conversation["items"][1]["kind"], "agent")
             self.assertEqual(conversation["items"][1]["text"], "I saw your message.")
+
+    def test_start_agent_resolves_parent_ref(self):
+        with _temp_home():
+            parent = start_agent(
+                "Parent work.",
+                name="parent-agent",
+                hostname="host-a",
+            )
+            child = start_agent(
+                "Child work.",
+                name="child-agent",
+                parent_ref="parent-agent",
+                hostname="host-a",
+            )
+            shown = show_agent(child["id"])
+            self.assertEqual(shown["meta"]["parent_id"], parent["id"])
+            self.assertEqual(shown["meta"]["created_by"], "parent-agent")
+            self.assertEqual(shown["parent"]["id"], parent["id"])
+
+    def test_managed_agent_can_create_child_with_parent_defaults(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        end = start + timedelta(hours=1)
+        captured = {}
+
+        with _temp_home():
+            parent = start_agent(
+                "Spawn a child agent.",
+                name="parent-agent",
+                hostname="host-a",
+                now=start,
+            )
+
+            class FakeAgent:
+                def __init__(
+                    self,
+                    cwd=None,
+                    yolo=True,
+                    thread_id=None,
+                    flags=None,
+                    include_thinking=False,
+                    backend=None,
+                    env=None,
+                ):
+                    self.thread_id = thread_id
+                    self.last_usage = {}
+                    self.env = dict(env or {})
+                    captured["env"] = self.env
+
+                def __call__(self, prompt):
+                    with patch.dict(os.environ, self.env, clear=False):
+                        child = start_agent(
+                            "Child work.",
+                            name="child-agent",
+                            hostname="host-a",
+                        )
+                    captured["child_id"] = child["id"]
+                    return json.dumps(
+                        {
+                            "status": "Spawned child",
+                            "continue": False,
+                            "reply": child["id"],
+                        }
+                    )
+
+            with patch("codexapi.agents.Agent", FakeAgent):
+                with patch(
+                    "codexapi.agents.utc_now",
+                    side_effect=[start, start + timedelta(seconds=1), end],
+                ):
+                    result = nudge_agent(
+                        parent["id"],
+                        hostname="host-a",
+                        now=start,
+                    )
+            self.assertTrue(result["ran"])
+            self.assertEqual(result["woken"], 1)
+            self.assertEqual(captured["env"]["CODEXAPI_AGENT_ID"], parent["id"])
+            self.assertEqual(captured["env"]["CODEXAPI_AGENT_NAME"], "parent-agent")
+
+            child = show_agent(captured["child_id"])
+            self.assertEqual(child["meta"]["created_by"], "parent-agent")
+            self.assertEqual(child["meta"]["parent_id"], parent["id"])
+            self.assertEqual(child["parent"]["name"], "parent-agent")
+
+            parent_view = show_agent(parent["id"])
+            self.assertIn(captured["child_id"], parent_view["child_ids"])
+            self.assertEqual(parent_view["children"][0]["name"], "child-agent")
 
     def test_pause_then_resume(self):
         calls = []

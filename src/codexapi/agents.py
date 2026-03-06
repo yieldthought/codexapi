@@ -100,6 +100,7 @@ def start_agent(
     cwd=None,
     name=None,
     created_by=None,
+    parent_ref=None,
     stop_policy="until_done",
     heartbeat_minutes=5,
     backend=None,
@@ -133,8 +134,9 @@ def start_agent(
     commands_claimed.mkdir(parents=True, exist_ok=False)
     runs_dir.mkdir(parents=True, exist_ok=False)
 
+    parent_id, parent_name = _parent_identity(home, parent_ref)
     if created_by is None:
-        created_by = os.environ.get("USER") or "user"
+        created_by = parent_name or os.environ.get("CODEXAPI_AGENT_NAME") or os.environ.get("USER") or "user"
     cwd = _resolve_cwd(cwd)
     session = {
         "thread_id": "",
@@ -152,6 +154,7 @@ def start_agent(
         "name": agent_name,
         "created_at": format_utc(now),
         "created_by": str(created_by),
+        "parent_id": parent_id,
         "hostname": host,
         "cwd": cwd,
         "prompt": prompt.strip(),
@@ -192,12 +195,13 @@ def list_agents(home=None):
     root = home / "agents"
     if not root.exists():
         return []
+    child_map = _child_map(home)
     agents = []
     for agent_dir in root.iterdir():
         if not agent_dir.is_dir():
             continue
         try:
-            agents.append(_snapshot(agent_dir))
+            agents.append(_snapshot(agent_dir, child_map))
         except FileNotFoundError:
             continue
     agents.sort(key=lambda item: item["created_at"], reverse=True)
@@ -206,13 +210,18 @@ def list_agents(home=None):
 
 def show_agent(agent_ref, home=None):
     """Return a full agent snapshot."""
+    home = _resolve_home(home)
+    child_map = _child_map(home)
     agent_dir = resolve_agent_dir(agent_ref, home)
-    snapshot = _snapshot(agent_dir)
+    snapshot = _snapshot(agent_dir, child_map)
     snapshot["meta"] = _read_json(agent_dir / "meta.json")
     snapshot["state"] = _read_json(agent_dir / "state.json")
+    snapshot["state"]["child_ids"] = snapshot["child_ids"]
     snapshot["state"]["unread_message_count"] = snapshot["unread_message_count"]
     snapshot["session"] = _read_session(agent_dir)
     snapshot["recent_runs"] = _recent_runs(agent_dir, 5)
+    snapshot["parent"] = _agent_brief(home, snapshot["parent_id"], child_map)
+    snapshot["children"] = _agent_briefs(home, snapshot["child_ids"], child_map)
     return snapshot
 
 
@@ -569,7 +578,7 @@ def _run_agent_turn(meta, session, prompt, runner=None):
         session.get("flags") or None,
         include_thinking=False,
         backend=session.get("backend") or None,
-        env=session.get("env") or None,
+        env=_agent_env(meta, session),
     )
     message = worker(prompt)
     usage = worker.last_usage or {}
@@ -783,9 +792,13 @@ def _queue_command(agent_ref, kind, body, author, home, hostname, now):
     return payload
 
 
-def _snapshot(agent_dir):
+def _snapshot(agent_dir, child_map=None):
     meta = _read_json(agent_dir / "meta.json")
     state = _read_json(agent_dir / "state.json")
+    if child_map is None:
+        child_ids = _child_map(agent_dir.parents[1]).get(meta["id"], [])
+    else:
+        child_ids = child_map.get(meta["id"], [])
     unread = int(state.get("unread_message_count") or 0) + len(
         _queued_send_commands(agent_dir)
     )
@@ -794,6 +807,7 @@ def _snapshot(agent_dir):
         "name": meta["name"],
         "created_at": meta["created_at"],
         "created_by": meta["created_by"],
+        "parent_id": meta.get("parent_id") or "",
         "hostname": meta["hostname"],
         "cwd": meta["cwd"],
         "stop_policy": meta["stop_policy"],
@@ -809,6 +823,7 @@ def _snapshot(agent_dir):
         "output_tokens": int(state.get("output_tokens") or 0),
         "total_tokens": int(state.get("total_tokens") or 0),
         "avg_tokens_per_hour": float(state.get("avg_tokens_per_hour") or 0.0),
+        "child_ids": list(child_ids),
         "last_error": state.get("last_error") or "",
         "activity": state.get("activity") or "",
         "reply": state.get("reply") or "",
@@ -865,6 +880,18 @@ def _capture_env():
     return env
 
 
+def _parent_identity(home, parent_ref):
+    """Return the resolved parent agent id and name, if any."""
+    if parent_ref is not None and str(parent_ref).strip():
+        meta = _read_json(resolve_agent_dir(str(parent_ref), home) / "meta.json")
+        return meta["id"], meta["name"]
+    parent_id = os.environ.get("CODEXAPI_AGENT_ID", "").strip()
+    parent_name = os.environ.get("CODEXAPI_AGENT_NAME", "").strip()
+    if parent_id:
+        return parent_id, parent_name
+    return "", ""
+
+
 def _resolve_home(home):
     if home is None:
         return codexapi_home()
@@ -915,6 +942,16 @@ def _sync_state_from_session(state, session):
     pending = session.get("pending_messages") or []
     state["unread_message_count"] = len(pending)
     state["thread_id"] = session.get("thread_id") or ""
+
+
+def _agent_env(meta, session):
+    """Return the backend env with stable agent identity added."""
+    env = dict(session.get("env") or {})
+    env["CODEXAPI_AGENT_ID"] = meta["id"]
+    env["CODEXAPI_AGENT_NAME"] = meta["name"]
+    if meta.get("parent_id"):
+        env["CODEXAPI_AGENT_PARENT_ID"] = meta["parent_id"]
+    return env
 
 
 def _command_id(now, hostname):
@@ -1101,6 +1138,54 @@ def _queued_send_commands(agent_dir):
         if payload.get("kind") == "send":
             queued.append(payload)
     return queued
+
+
+def _child_map(home):
+    """Return parent_id -> [child ids] for this home."""
+    root = _resolve_home(home) / "agents"
+    child_map = {}
+    if not root.exists():
+        return child_map
+    for agent_dir in root.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        try:
+            meta = _read_json(agent_dir / "meta.json")
+        except FileNotFoundError:
+            continue
+        parent_id = meta.get("parent_id") or ""
+        if not parent_id:
+            continue
+        child_map.setdefault(parent_id, []).append(meta["id"])
+    for child_ids in child_map.values():
+        child_ids.sort()
+    return child_map
+
+
+def _agent_brief(home, agent_id, child_map):
+    """Return a short snapshot for one related agent."""
+    if not agent_id:
+        return None
+    try:
+        agent_dir = resolve_agent_dir(agent_id, home)
+    except ValueError:
+        return None
+    snapshot = _snapshot(agent_dir, child_map)
+    return {
+        "id": snapshot["id"],
+        "name": snapshot["name"],
+        "status": snapshot["status"],
+        "reply": snapshot["reply"],
+    }
+
+
+def _agent_briefs(home, agent_ids, child_map):
+    """Return short snapshots for a list of related agents."""
+    return [
+        brief
+        for brief in (_agent_brief(home, agent_id, child_map) for agent_id in agent_ids or [])
+        if brief is not None
+    ]
 
 
 def _codex_rollout_usage(session, thread_id, started_at):
