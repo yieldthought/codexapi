@@ -13,6 +13,15 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import Agent, agent
+from .agents import (
+    control_agent,
+    list_agents as list_managed_agents,
+    read_agent as read_managed_agent,
+    send_agent,
+    show_agent as show_managed_agent,
+    start_agent as start_managed_agent,
+    tick as tick_managed_agents,
+)
 from .foreach import foreach
 from .ralph import Ralph, cancel_ralph_loop
 from .science import Science
@@ -129,6 +138,35 @@ def _single_line(text):
     if not text:
         return ""
     return " ".join(text.replace("\r", " ").split())
+
+
+def _print_managed_agent_list(items):
+    if not items:
+        print("No agents.")
+        return
+    print("ID       STAT     HOST            UNREAD TOKENS  NAME")
+    for item in items:
+        ident = item["id"][:8]
+        status = _truncate_head(item["status"] or "-", 8)
+        host = _truncate_head(item["hostname"] or "-", 15)
+        unread = str(item["unread_message_count"])
+        tokens = _format_token_total(item["total_tokens"])
+        name = item["name"]
+        print(f"{ident:<8} {status:<8} {host:<15} {unread:>6} {tokens:>6}  {name}")
+
+
+def _print_managed_agent_read(result):
+    print(f"{result['name']} [{result['status']}]")
+    items = result.get("items") or []
+    if not items:
+        print("No messages.")
+        return
+    for item in items:
+        stamp = item.get("timestamp") or "-"
+        kind = item.get("kind") or "item"
+        print(f"[{stamp}] {kind}:")
+        print(item.get("text") or "")
+        print()
 
 
 
@@ -1140,6 +1178,101 @@ def main(argv=None):
         help="Print the current thread id to stderr after running.",
     )
 
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Manage durable long-running agents.",
+    )
+    agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
+
+    agent_start = agent_subparsers.add_parser(
+        "start",
+        help="Create a durable agent.",
+    )
+    agent_start.add_argument(
+        "prompt",
+        nargs="?",
+        help="Prompt to send. Use '-' or omit to read from stdin.",
+    )
+    agent_start.add_argument("--cwd", help="Working directory for the agent.")
+    agent_start.add_argument("--name", help="Optional agent name.")
+    agent_start.add_argument(
+        "--created-by",
+        help="Creator label (defaults to $USER).",
+    )
+    agent_start.add_argument(
+        "--stop-policy",
+        default="until_done",
+        choices=("until_done", "until_stopped"),
+        help="Whether the agent stops itself when done or runs until stopped.",
+    )
+    agent_start.add_argument(
+        "--heartbeat-minutes",
+        type=int,
+        default=5,
+        help="Heartbeat interval in minutes (default: 5).",
+    )
+    agent_start.add_argument(
+        "--backend",
+        choices=("codex", "cursor"),
+        help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
+    agent_start.add_argument(
+        "--no-yolo",
+        action="store_false",
+        dest="yolo",
+        help="Disable --yolo (Codex uses --full-auto).",
+    )
+    agent_start.add_argument(
+        "--flags",
+        help="Additional raw CLI flags to pass to the backend.",
+    )
+
+    agent_subparsers.add_parser(
+        "list",
+        help="List durable agents in this CODEXAPI_HOME.",
+    )
+
+    agent_show = agent_subparsers.add_parser(
+        "show",
+        help="Show one durable agent.",
+    )
+    agent_show.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+
+    agent_read = agent_subparsers.add_parser(
+        "read",
+        help="Read recent visible communication for one agent.",
+    )
+    agent_read.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+    agent_read.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum number of items to show (default: 10).",
+    )
+
+    agent_send = agent_subparsers.add_parser(
+        "send",
+        help="Queue a message for an agent.",
+    )
+    agent_send.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+    agent_send.add_argument("message", help="Message to queue.")
+    agent_send.add_argument("--author", help="Author label for the message.")
+
+    for subcommand, help_text in (
+        ("wake", "Request an extra wake for an agent."),
+        ("pause", "Pause an agent."),
+        ("resume", "Resume a paused agent."),
+        ("cancel", "Cancel an agent."),
+    ):
+        subparser = agent_subparsers.add_parser(subcommand, help=help_text)
+        subparser.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+        subparser.add_argument("--author", help="Author label for the command.")
+
+    agent_subparsers.add_parser(
+        "tick",
+        help="Process due agents for the current host.",
+    )
+
     task_parser = subparsers.add_parser(
         "task",
         help="Run a task with verification retries.",
@@ -1435,6 +1568,51 @@ def main(argv=None):
     if args.command is None:
         parser.print_help()
         raise SystemExit(2)
+    if args.command == "agent":
+        if args.agent_command is None:
+            agent_parser.print_help()
+            raise SystemExit(2)
+        if args.agent_command == "start":
+            prompt = _read_prompt(args.prompt)
+            result = start_managed_agent(
+                prompt,
+                args.cwd,
+                args.name,
+                args.created_by,
+                args.stop_policy,
+                args.heartbeat_minutes,
+                args.backend,
+                args.yolo,
+                args.flags,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command == "list":
+            _print_managed_agent_list(list_managed_agents())
+            return
+        if args.agent_command == "show":
+            print(json.dumps(show_managed_agent(args.agent_ref), indent=2, sort_keys=True))
+            return
+        if args.agent_command == "read":
+            if args.limit < 1:
+                raise SystemExit("--limit must be >= 1.")
+            _print_managed_agent_read(read_managed_agent(args.agent_ref, args.limit))
+            return
+        if args.agent_command == "send":
+            result = send_agent(args.agent_ref, args.message, args.author)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command in ("wake", "pause", "resume", "cancel"):
+            result = control_agent(
+                args.agent_ref,
+                args.agent_command,
+                args.author,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command == "tick":
+            print(json.dumps(tick_managed_agents(), indent=2, sort_keys=True))
+            return
     if args.command == "create":
         _create_task_template(args.filename)
         return

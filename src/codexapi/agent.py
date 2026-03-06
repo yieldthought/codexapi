@@ -31,6 +31,7 @@ def agent(
     flags=None,
     include_thinking=False,
     backend=None,
+    env=None,
 ):
     """Run a single agent turn and return only the agent's message.
 
@@ -41,12 +42,13 @@ def agent(
         flags: Additional raw CLI flags to pass to the agent backend.
         include_thinking: When true, return all agent messages joined together.
         backend: Agent backend to use ("codex" or "cursor").
+        env: Optional environment variables for the backend subprocess.
 
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
     message, _thread_id = _run_agent(
-        prompt, cwd, None, yolo, flags, include_thinking, backend
+        prompt, cwd, None, yolo, flags, include_thinking, backend, env
     )
     return message
 
@@ -78,6 +80,7 @@ class Agent:
         welfare=False,
         include_thinking=False,
         backend=None,
+        env=None,
     ):
         """Create a new session wrapper.
 
@@ -90,6 +93,7 @@ class Agent:
                 and raise WelfareStop if the agent outputs MAKE IT STOP.
             include_thinking: When true, return all agent messages joined together.
             backend: Agent backend to use ("codex" or "cursor").
+            env: Optional environment variables for the backend subprocess.
         """
         self.cwd = cwd
         self._yolo = yolo
@@ -98,6 +102,7 @@ class Agent:
         self._include_thinking = include_thinking
         self.thread_id = thread_id
         self._backend = backend
+        self._env = env
 
     def __call__(self, prompt):
         """Send a prompt to the agent backend and return the message."""
@@ -111,6 +116,7 @@ class Agent:
             self._flags,
             self._include_thinking,
             self._backend,
+            self._env,
         )
         if thread_id:
             self.thread_id = thread_id
@@ -119,14 +125,14 @@ class Agent:
         return message
 
 
-def _run_agent(prompt, cwd, thread_id, yolo, flags, include_thinking, backend):
+def _run_agent(prompt, cwd, thread_id, yolo, flags, include_thinking, backend, env):
     backend = _resolve_backend(backend)
     if backend == "codex":
-        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking)
-    return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking)
+        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
+    return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
+def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -155,6 +161,7 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
         text=True,
         capture_output=True,
         cwd=os.fspath(cwd) if cwd else None,
+        env=_merged_env(env),
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -166,7 +173,7 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking):
     return _parse_jsonl(result.stdout, include_thinking)
 
 
-def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking):
+def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
     """Invoke the Cursor agent CLI and return the message plus session id (if any)."""
     command = [
         _CURSOR_BIN,
@@ -189,6 +196,7 @@ def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking):
         text=True,
         capture_output=True,
         cwd=os.fspath(cwd) if cwd else None,
+        env=_merged_env(env),
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -285,3 +293,18 @@ def _parse_cursor_json(output, include_thinking):
     if not isinstance(session_id, str):
         session_id = None
     return result, session_id
+
+
+def _merged_env(env):
+    """Return subprocess env overlaying the current process env."""
+    if env is None:
+        return None
+    if not isinstance(env, dict):
+        raise TypeError("env must be a dict or None")
+    merged = os.environ.copy()
+    for key, value in env.items():
+        if value is None:
+            merged.pop(str(key), None)
+        else:
+            merged[str(key)] = str(value)
+    return merged
