@@ -23,6 +23,7 @@ from .agents import (
     show_agent as show_managed_agent,
     start_agent as start_managed_agent,
     tick as tick_managed_agents,
+    uninstall_cron as uninstall_agent_cron,
 )
 from .foreach import foreach
 from .ralph import Ralph, cancel_ralph_loop
@@ -146,15 +147,18 @@ def _print_managed_agent_list(items):
     if not items:
         print("No agents.")
         return
-    print("ID       STAT     HOST            UNREAD TOKENS  NAME")
+    print("ID       STAT     HOST            UNREAD TOKENS  TOK/H   NAME")
     for item in items:
         ident = item["id"][:8]
         status = _truncate_head(item["status"] or "-", 8)
         host = _truncate_head(item["hostname"] or "-", 15)
         unread = str(item["unread_message_count"])
         tokens = _format_token_total(item["total_tokens"])
+        tok_h = _format_token_rate(item.get("avg_tokens_per_hour"))
         name = item["name"]
-        print(f"{ident:<8} {status:<8} {host:<15} {unread:>6} {tokens:>6}  {name}")
+        print(
+            f"{ident:<8} {status:<8} {host:<15} {unread:>6} {tokens:>6} {tok_h:>7}  {name}"
+        )
 
 
 def _print_managed_agent_read(result):
@@ -166,7 +170,11 @@ def _print_managed_agent_read(result):
     for item in items:
         stamp = item.get("timestamp") or "-"
         kind = item.get("kind") or "item"
-        print(f"[{stamp}] {kind}:")
+        author = item.get("author") or ""
+        if author:
+            print(f"[{stamp}] {kind} {author}:")
+        else:
+            print(f"[{stamp}] {kind}:")
         print(item.get("text") or "")
         print()
 
@@ -473,6 +481,26 @@ def _format_token_total(value):
     if value >= 1_000:
         return f"{value / 1_000:.1f}k"
     return str(value)
+
+
+def _format_token_rate(value):
+    if value is None:
+        return "-"
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if value < 0:
+        return "-"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}m"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    if value >= 100:
+        return f"{value:.0f}"
+    if value >= 10:
+        return f"{value:.1f}"
+    return f"{value:.2f}"
 
 
 def _format_duration(seconds):
@@ -1278,6 +1306,10 @@ def main(argv=None):
         "install-cron",
         help="Install or update the cron entry for this CODEXAPI_HOME.",
     )
+    agent_subparsers.add_parser(
+        "uninstall-cron",
+        help="Remove the cron entry for this CODEXAPI_HOME.",
+    )
 
     task_parser = subparsers.add_parser(
         "task",
@@ -1623,6 +1655,9 @@ def main(argv=None):
             return
         if args.agent_command == "install-cron":
             print(json.dumps(install_agent_cron(), indent=2, sort_keys=True))
+            return
+        if args.agent_command == "uninstall-cron":
+            print(json.dumps(uninstall_agent_cron(), indent=2, sort_keys=True))
             return
     if args.command == "create":
         _create_task_template(args.filename)

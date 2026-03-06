@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from codexapi.agents import (
     _tick_lock_path,
     _try_lock,
+    _remove_cron_line,
     _upsert_cron_line,
     control_agent,
     install_cron,
@@ -23,6 +24,7 @@ from codexapi.agents import (
     show_agent,
     start_agent,
     tick,
+    uninstall_cron,
     write_tick_wrapper,
 )
 
@@ -92,8 +94,11 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(shown["state"]["unread_message_count"], 0)
 
             conversation = read_agent(agent["id"])
-            self.assertEqual(conversation["items"][0]["kind"], "agent")
-            self.assertEqual(conversation["items"][0]["text"], "I saw your message.")
+            self.assertEqual(conversation["items"][0]["kind"], "user")
+            self.assertEqual(conversation["items"][0]["author"], "mark")
+            self.assertEqual(conversation["items"][0]["text"], "status")
+            self.assertEqual(conversation["items"][1]["kind"], "agent")
+            self.assertEqual(conversation["items"][1]["text"], "I saw your message.")
 
     def test_pause_then_resume(self):
         calls = []
@@ -163,6 +168,16 @@ class AgentsTests(unittest.TestCase):
         self.assertIn("/tmp/home-a/bin/agent-tick", updated)
         self.assertIn("/tmp/home-b/bin/agent-tick", updated)
 
+    def test_remove_cron_line_keeps_other_entries(self):
+        existing = (
+            "* * * * * /tmp/home-a/bin/agent-tick >/dev/null 2>&1  # codexapi-agent::host-a::aaa\n"
+            "* * * * * /tmp/home-b/bin/agent-tick >/dev/null 2>&1  # codexapi-agent::host-a::bbb\n"
+        )
+        updated, changed = _remove_cron_line(existing, "codexapi-agent::host-a::aaa")
+        self.assertTrue(changed)
+        self.assertNotIn("/tmp/home-a/bin/agent-tick", updated)
+        self.assertIn("/tmp/home-b/bin/agent-tick", updated)
+
     def test_install_cron_writes_wrapper_and_updates_crontab_text(self):
         writes = []
 
@@ -186,6 +201,59 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(len(writes), 1)
             self.assertIn(str(wrapper), writes[0])
             self.assertIn("codexapi-agent::host-a::", writes[0])
+
+    def test_install_cron_is_idempotent_when_line_already_matches(self):
+        writes = []
+
+        with _temp_home() as home:
+            expected_line = render_cron_line(home=home, hostname="host-a")
+
+            def fake_read():
+                return expected_line + "\n"
+
+            def fake_write(text):
+                writes.append(text)
+
+            with patch("codexapi.agents._read_crontab", fake_read):
+                with patch("codexapi.agents._write_crontab", fake_write):
+                    result = install_cron(
+                        home=home,
+                        hostname="host-a",
+                        python_executable="/tmp/venv/bin/python",
+                        path_value="/tmp/venv/bin:/usr/bin",
+                    )
+            self.assertFalse(result["changed"])
+            self.assertEqual(writes, [])
+
+    def test_uninstall_cron_removes_only_this_home_entry_and_wrapper(self):
+        writes = []
+
+        def fake_write(text):
+            writes.append(text)
+
+        with _temp_home() as home:
+            wrapper = write_tick_wrapper(
+                home=home,
+                python_executable="/tmp/venv/bin/python",
+                path_value="/tmp/venv/bin:/usr/bin",
+            )
+            record = home / "cron" / "agent.cron"
+            record.write_text("placeholder\n", encoding="utf-8")
+            this_line = render_cron_line(home=home, hostname="host-a")
+            other_line = render_cron_line(home="/tmp/other-home", hostname="host-a")
+
+            def fake_read():
+                return this_line + "\n" + other_line + "\n"
+
+            with patch("codexapi.agents._read_crontab", fake_read):
+                with patch("codexapi.agents._write_crontab", fake_write):
+                    result = uninstall_cron(home=home, hostname="host-a")
+            self.assertTrue(result["changed"])
+            self.assertFalse(wrapper.exists())
+            self.assertFalse(record.exists())
+            self.assertEqual(len(writes), 1)
+            self.assertNotIn(str(wrapper), writes[0])
+            self.assertIn("/tmp/other-home/bin/agent-tick", writes[0])
 
     def test_nudge_agent_runs_immediately_and_updates_token_totals(self):
         start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)

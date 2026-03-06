@@ -227,9 +227,21 @@ def read_agent(agent_ref, limit=10, home=None):
                     "kind": "queued",
                     "timestamp": queued.get("created_at") or "",
                     "text": text,
+                    "author": queued.get("author") or "user",
                 }
             )
     for run in _recent_runs(agent_dir, limit):
+        for message in run.get("messages") or []:
+            text = message.get("text") or ""
+            if text:
+                items.append(
+                    {
+                        "kind": "user",
+                        "timestamp": message.get("created_at") or "",
+                        "text": text,
+                        "author": message.get("author") or "user",
+                    }
+                )
         reply = run.get("reply") or ""
         if reply:
             items.append(
@@ -247,14 +259,15 @@ def read_agent(agent_ref, limit=10, home=None):
                     "kind": "pending",
                     "timestamp": pending.get("created_at") or "",
                     "text": text,
+                    "author": pending.get("author") or "user",
                 }
             )
-    items.sort(key=lambda item: item.get("timestamp") or "", reverse=True)
+    items.sort(key=lambda item: item.get("timestamp") or "")
     return {
         "id": meta["id"],
         "name": meta["name"],
         "status": state.get("status") or "",
-        "items": items[:limit],
+        "items": items[-limit:],
     }
 
 
@@ -340,6 +353,28 @@ def install_cron(home=None, hostname=None, python_executable=None, path_value=No
         "home": str(home),
         "wrapper": str(wrapper),
         "cron_line": cron_line,
+        "changed": changed,
+    }
+
+
+def uninstall_cron(home=None, hostname=None):
+    """Remove the cron entry for this home and host."""
+    home = _resolve_home(home)
+    host = hostname or current_hostname()
+    _ensure_home(home)
+    tag = _cron_tag(home, host)
+    existing = _read_crontab()
+    updated, changed = _remove_cron_line(existing, tag)
+    if changed:
+        _write_crontab(updated)
+    wrapper = home / "bin" / "agent-tick"
+    cron_record = home / "cron" / "agent.cron"
+    _remove_file(wrapper)
+    _remove_file(cron_record)
+    return {
+        "hostname": host,
+        "home": str(home),
+        "wrapper": str(wrapper),
         "changed": changed,
     }
 
@@ -442,6 +477,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         "ended_at": "",
         "wake_reason": _wake_reason(state, commands),
         "commands": [command["kind"] for command in commands],
+        "messages": [],
         "status": "",
         "reply": "",
         "notify": "",
@@ -453,6 +489,16 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         outcome = _run_agent_turn(meta, session, prompt, runner)
         response = _parse_agent_response(outcome["message"])
         ended = utc_now()
+        delivered_messages = [
+            {
+                "id": message.get("id") or "",
+                "created_at": message.get("created_at") or "",
+                "author": message.get("author") or "user",
+                "text": message.get("text") or "",
+            }
+            for message in (session.get("pending_messages") or [])
+            if message.get("text")
+        ]
         session["thread_id"] = outcome.get("thread_id") or session.get("thread_id") or ""
         session["pending_messages"] = []
         usage = _normalize_usage(outcome.get("usage"))
@@ -480,6 +526,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         run["notify"] = response["notify"]
         run["continue"] = bool(response["continue"])
         run["usage"] = usage
+        run["messages"] = delivered_messages
         _write_run(agent_dir, meta["hostname"], run)
         if response["notify"]:
             title = f"Agent: {meta['name']}"
@@ -1064,6 +1111,20 @@ def _upsert_cron_line(existing, line, tag):
     return text, changed
 
 
+def _remove_cron_line(existing, tag):
+    lines = []
+    changed = False
+    for raw in str(existing or "").splitlines():
+        if raw.strip().endswith(f"# {tag}"):
+            changed = True
+            continue
+        lines.append(raw)
+    text = "\n".join(lines)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text, changed
+
+
 def _read_crontab():
     result = subprocess.run(
         ["crontab", "-l"],
@@ -1088,3 +1149,10 @@ def _write_crontab(text):
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "crontab install failed")
+
+
+def _remove_file(path):
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        return
