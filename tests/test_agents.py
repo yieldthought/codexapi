@@ -12,12 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from codexapi.agents import (
     _tick_lock_path,
     _try_lock,
+    _upsert_cron_line,
     control_agent,
+    install_cron,
     read_agent,
+    render_cron_line,
     send_agent,
     show_agent,
     start_agent,
     tick,
+    write_tick_wrapper,
 )
 
 
@@ -125,6 +129,54 @@ class AgentsTests(unittest.TestCase):
             self.assertFalse(result["ran"])
             self.assertEqual(result["processed"], 0)
             self.assertEqual(result["woken"], 0)
+
+    def test_write_tick_wrapper_pins_home_and_python(self):
+        with _temp_home() as home:
+            wrapper = write_tick_wrapper(
+                home=home,
+                python_executable="/tmp/venv/bin/python",
+                path_value="/tmp/venv/bin:/usr/bin",
+            )
+            text = wrapper.read_text(encoding="utf-8")
+            self.assertIn("export CODEXAPI_HOME=", text)
+            self.assertIn(str(home), text)
+            self.assertIn("export PATH=", text)
+            self.assertIn("/tmp/venv/bin:/usr/bin", text)
+            self.assertIn("exec /tmp/venv/bin/python -m codexapi agent tick", text)
+
+    def test_upsert_cron_line_keeps_different_homes_separate(self):
+        line_a = render_cron_line(home="/tmp/home-a", hostname="host-a")
+        line_b = render_cron_line(home="/tmp/home-b", hostname="host-a")
+        updated, changed = _upsert_cron_line("", line_a, "codexapi-agent::host-a::aaa")
+        self.assertTrue(changed)
+        updated, changed = _upsert_cron_line(updated, line_b, "codexapi-agent::host-a::bbb")
+        self.assertTrue(changed)
+        self.assertIn("/tmp/home-a/bin/agent-tick", updated)
+        self.assertIn("/tmp/home-b/bin/agent-tick", updated)
+
+    def test_install_cron_writes_wrapper_and_updates_crontab_text(self):
+        writes = []
+
+        def fake_read():
+            return ""
+
+        def fake_write(text):
+            writes.append(text)
+
+        with _temp_home() as home:
+            with patch("codexapi.agents._read_crontab", fake_read):
+                with patch("codexapi.agents._write_crontab", fake_write):
+                    result = install_cron(
+                        home=home,
+                        hostname="host-a",
+                        python_executable="/tmp/venv/bin/python",
+                        path_value="/tmp/venv/bin:/usr/bin",
+                    )
+            wrapper = Path(result["wrapper"])
+            self.assertTrue(wrapper.exists())
+            self.assertEqual(len(writes), 1)
+            self.assertIn(str(wrapper), writes[0])
+            self.assertIn("codexapi-agent::host-a::", writes[0])
 
 
 if __name__ == "__main__":

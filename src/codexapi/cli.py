@@ -15,6 +15,7 @@ from pathlib import Path
 from .agent import Agent, agent
 from .agents import (
     control_agent,
+    install_cron as install_agent_cron,
     list_agents as list_managed_agents,
     read_agent as read_managed_agent,
     send_agent,
@@ -1272,6 +1273,10 @@ def main(argv=None):
         "tick",
         help="Process due agents for the current host.",
     )
+    agent_subparsers.add_parser(
+        "install-cron",
+        help="Install or update the cron entry for this CODEXAPI_HOME.",
+    )
 
     task_parser = subparsers.add_parser(
         "task",
@@ -1612,6 +1617,9 @@ def main(argv=None):
             return
         if args.agent_command == "tick":
             print(json.dumps(tick_managed_agents(), indent=2, sort_keys=True))
+            return
+        if args.agent_command == "install-cron":
+            print(json.dumps(install_agent_cron(), indent=2, sort_keys=True))
             return
     if args.command == "create":
         _create_task_template(args.filename)

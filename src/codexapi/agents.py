@@ -3,12 +3,16 @@
 import json
 import os
 import random
+import shlex
 import socket
 import string
+import subprocess
+import sys
 import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from hashlib import sha1
 from pathlib import Path
 
 import fcntl
@@ -289,6 +293,30 @@ def tick(home=None, hostname=None, now=None, runner=None):
         return {"ran": True, "hostname": host, "processed": processed, "woken": woken}
 
 
+def install_cron(home=None, hostname=None, python_executable=None, path_value=None):
+    """Install or update the cron entry for this home and host."""
+    home = _resolve_home(home)
+    host = hostname or current_hostname()
+    _ensure_home(home)
+    python_executable = python_executable or sys.executable
+    path_value = path_value or os.environ.get("PATH", "")
+    wrapper = write_tick_wrapper(home, python_executable, path_value)
+    cron_line = render_cron_line(home, host)
+    tag = _cron_tag(home, host)
+    existing = _read_crontab()
+    updated, changed = _upsert_cron_line(existing, cron_line, tag)
+    if changed:
+        _write_crontab(updated)
+    _write_text(home / "cron" / "agent.cron", cron_line + "\n")
+    return {
+        "hostname": host,
+        "home": str(home),
+        "wrapper": str(wrapper),
+        "cron_line": cron_line,
+        "changed": changed,
+    }
+
+
 def resolve_agent_dir(agent_ref, home=None):
     """Resolve an agent by id, unique id prefix, or name."""
     if not isinstance(agent_ref, str) or not agent_ref.strip():
@@ -310,6 +338,32 @@ def resolve_agent_dir(agent_ref, home=None):
     if len(matches) > 1:
         raise ValueError(f"Ambiguous agent reference: {ref}")
     return _agent_dir(home, matches[0])
+
+
+def write_tick_wrapper(home=None, python_executable=None, path_value=None):
+    """Write the cron wrapper script and return its path."""
+    home = _resolve_home(home)
+    _ensure_home(home)
+    python_executable = python_executable or sys.executable
+    path_value = path_value or os.environ.get("PATH", "")
+    wrapper = home / "bin" / "agent-tick"
+    lines = [
+        "#!/bin/bash",
+        f"export CODEXAPI_HOME={shlex.quote(str(home))}",
+        f"export PATH={shlex.quote(path_value)}",
+        f"exec {shlex.quote(str(python_executable))} -m codexapi agent tick",
+    ]
+    _write_text(wrapper, "\n".join(lines) + "\n")
+    wrapper.chmod(0o755)
+    return wrapper
+
+
+def render_cron_line(home=None, hostname=None):
+    """Return the cron line for this home and host."""
+    home = _resolve_home(home)
+    host = hostname or current_hostname()
+    wrapper = home / "bin" / "agent-tick"
+    return f"* * * * * {shlex.quote(str(wrapper))} >/dev/null 2>&1  # { _cron_tag(home, host) }"
 
 
 def _tick_agent(agent_dir, now, runner):
@@ -862,3 +916,56 @@ def _wake_reason(state, commands):
     if not reasons:
         reasons.append("heartbeat")
     return ",".join(sorted(set(reasons)))
+
+
+def _cron_tag(home, hostname):
+    key = sha1(str(home).encode("utf-8")).hexdigest()[:12]
+    return f"codexapi-agent::{hostname}::{key}"
+
+
+def _upsert_cron_line(existing, line, tag):
+    lines = []
+    found = False
+    for raw in str(existing or "").splitlines():
+        if raw.strip().endswith(f"# {tag}"):
+            if not found:
+                lines.append(line)
+                found = True
+            continue
+        lines.append(raw)
+    if not found:
+        lines.append(line)
+        found = True
+        changed = True
+    else:
+        changed = "\n".join(lines).strip() != str(existing or "").strip()
+    text = "\n".join(item for item in lines if item is not None)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text, changed
+
+
+def _read_crontab():
+    result = subprocess.run(
+        ["crontab", "-l"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout
+    stderr = (result.stderr or "").strip().lower()
+    stdout = (result.stdout or "").strip().lower()
+    if "no crontab" in stderr or "no crontab" in stdout:
+        return ""
+    raise RuntimeError(result.stderr.strip() or "crontab -l failed")
+
+
+def _write_crontab(text):
+    result = subprocess.run(
+        ["crontab", "-"],
+        input=text,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "crontab install failed")
