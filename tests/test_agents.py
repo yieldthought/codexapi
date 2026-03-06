@@ -42,6 +42,12 @@ def _temp_home():
 
 
 class AgentsTests(unittest.TestCase):
+    def test_current_hostname_prefers_override(self):
+        with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "stable-host"}, clear=False):
+            from codexapi.agents import current_hostname
+
+            self.assertEqual(current_hostname(), "stable-host")
+
     def test_homes_are_isolated(self):
         with _temp_home() as home_a:
             first = start_agent("Monitor the build queue.", hostname="host-a")
@@ -155,10 +161,12 @@ class AgentsTests(unittest.TestCase):
                 home=home,
                 python_executable="/tmp/venv/bin/python",
                 path_value="/tmp/venv/bin:/usr/bin",
+                hostname="stable-host",
             )
             text = wrapper.read_text(encoding="utf-8")
             self.assertIn("export CODEXAPI_HOME=", text)
             self.assertIn(str(home), text)
+            self.assertIn("export CODEXAPI_HOSTNAME=stable-host", text)
             self.assertIn("export PATH=", text)
             self.assertIn("/tmp/venv/bin:/usr/bin", text)
             self.assertIn("exec /tmp/venv/bin/python -m codexapi agent tick", text)

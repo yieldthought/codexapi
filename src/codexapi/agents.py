@@ -57,6 +57,9 @@ def codexapi_home():
 
 def current_hostname():
     """Return the current hostname."""
+    override = os.environ.get("CODEXAPI_HOSTNAME", "").strip()
+    if override:
+        return override
     name = socket.gethostname().strip()
     return name or "unknown-host"
 
@@ -341,7 +344,7 @@ def install_cron(home=None, hostname=None, python_executable=None, path_value=No
     _ensure_home(home)
     python_executable = python_executable or sys.executable
     path_value = path_value or os.environ.get("PATH", "")
-    wrapper = write_tick_wrapper(home, python_executable, path_value)
+    wrapper = write_tick_wrapper(home, python_executable, path_value, host)
     cron_line = render_cron_line(home, host)
     tag = _cron_tag(home, host)
     existing = _read_crontab()
@@ -403,16 +406,18 @@ def resolve_agent_dir(agent_ref, home=None):
     return _agent_dir(home, matches[0])
 
 
-def write_tick_wrapper(home=None, python_executable=None, path_value=None):
+def write_tick_wrapper(home=None, python_executable=None, path_value=None, hostname=None):
     """Write the cron wrapper script and return its path."""
     home = _resolve_home(home)
     _ensure_home(home)
     python_executable = python_executable or sys.executable
     path_value = path_value or os.environ.get("PATH", "")
+    hostname = hostname or current_hostname()
     wrapper = home / "bin" / "agent-tick"
     lines = [
         "#!/bin/bash",
         f"export CODEXAPI_HOME={shlex.quote(str(home))}",
+        f"export CODEXAPI_HOSTNAME={shlex.quote(str(hostname))}",
         f"export PATH={shlex.quote(path_value)}",
         f"exec {shlex.quote(str(python_executable))} -m codexapi agent tick",
     ]

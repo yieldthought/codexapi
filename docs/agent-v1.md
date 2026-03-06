@@ -75,6 +75,28 @@ Why this exists:
 Two different `CODEXAPI_HOME` values are two different systems. They do not see
 each other's agents, locks, scheduler wrappers, or cron entries.
 
+## `CODEXAPI_HOSTNAME`
+
+`CODEXAPI_HOSTNAME` overrides the host identity used for agent ownership and
+host-specific locks.
+
+Default:
+
+- use the process hostname reported by the OS
+
+Override:
+
+```text
+CODEXAPI_HOSTNAME=stable-hostname
+```
+
+Why this exists:
+
+- Some shells, cron environments, test harnesses, or sandboxes report different
+  hostnames for the same machine.
+- Agent ownership depends on an exact hostname match.
+- Tests and sandboxed runs need a stable explicit value.
+
 ## Agent Model
 
 Each agent stores at least:
@@ -364,6 +386,7 @@ Why it exists:
 The wrapper should:
 
 - export the resolved `CODEXAPI_HOME`
+- export the resolved `CODEXAPI_HOSTNAME`
 - set a safe `PATH`
 - invoke the exact Python interpreter or installed `codexapi` path discovered
   at install time
