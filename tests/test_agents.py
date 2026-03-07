@@ -35,6 +35,7 @@ from codexapi.cli import (
     _print_managed_agent_identity,
     _print_managed_agent_list,
     _print_managed_agent_show,
+    main as cli_main,
 )
 
 
@@ -626,6 +627,48 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("Prompt: Handle messages.", text)
             self.assertIn("Recent runs:", text)
             self.assertIn("msgs=1", text)
+
+    def test_cli_send_shows_immediate_agent_reply(self):
+        with _temp_home():
+            with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "host-a"}, clear=False):
+                agent = start_agent(
+                    "Handle messages.",
+                    hostname="host-a",
+                )
+
+                class FakeAgent:
+                    def __init__(
+                        self,
+                        cwd=None,
+                        yolo=True,
+                        thread_id=None,
+                        flags=None,
+                        include_thinking=False,
+                        backend=None,
+                        env=None,
+                    ):
+                        self.thread_id = thread_id
+                        self.last_usage = {}
+
+                    def __call__(self, prompt):
+                        self.thread_id = "thread-cli-send"
+                        return json.dumps(
+                            {
+                                "status": "Answered immediately",
+                                "continue": False,
+                                "reply": "I saw your note.",
+                            }
+                        )
+
+                output = io.StringIO()
+                with patch("codexapi.agents.Agent", FakeAgent):
+                    with redirect_stdout(output):
+                        cli_main(["agent", "send", agent["id"], "status"])
+                payload = json.loads(output.getvalue())
+                self.assertTrue(payload["nudge"]["woken"])
+                self.assertTrue(payload["delivered"])
+                self.assertEqual(payload["agent_status"], "Answered immediately")
+                self.assertEqual(payload["agent_reply"], "I saw your note.")
 
 
 if __name__ == "__main__":

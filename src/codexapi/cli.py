@@ -191,6 +191,28 @@ def _print_managed_agent_identity():
     print(f"Home: {codexapi_home()}")
 
 
+def _send_reply_info(agent_ref, message_id):
+    """Return the matching run reply for one sent message, if already delivered."""
+    shown = show_managed_agent(agent_ref)
+    for run in shown.get("recent_runs") or []:
+        for message in run.get("messages") or []:
+            if message.get("id") != message_id:
+                continue
+            info = {
+                "delivered": True,
+                "agent_status": run.get("status") or "",
+                "run_id": run.get("id") or "",
+            }
+            reply = run.get("reply") or ""
+            error = run.get("error") or ""
+            if reply:
+                info["agent_reply"] = reply
+            if error:
+                info["agent_error"] = error
+            return info
+    return None
+
+
 def _print_managed_agent_show(result):
     meta = result["meta"]
     state = result["state"]
@@ -1794,6 +1816,9 @@ def main(argv=None):
         if args.agent_command == "send":
             result = send_agent(args.agent_ref, args.message, args.author)
             result["nudge"] = nudge_agent(args.agent_ref)
+            reply_info = _send_reply_info(args.agent_ref, result["id"])
+            if reply_info:
+                result.update(reply_info)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command in ("wake", "pause", "resume", "cancel"):
