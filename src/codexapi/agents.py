@@ -4,6 +4,7 @@ import json
 import os
 import random
 import shlex
+import shutil
 import socket
 import string
 import subprocess
@@ -316,6 +317,35 @@ def control_agent(agent_ref, kind, author=None, home=None, hostname=None, now=No
     if kind not in _COMMAND_KINDS - {"send"}:
         raise ValueError(f"Unsupported control command: {kind}")
     return _queue_command(agent_ref, kind, "", author, home, hostname, now)
+
+
+def delete_agent(agent_ref, force=False, home=None):
+    """Delete one agent directory when it is safe to do so."""
+    home = _resolve_home(home)
+    child_map = _child_map(home)
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    snapshot = _snapshot(agent_dir, child_map)
+    meta = _read_json(agent_dir / "meta.json")
+    status = snapshot["status"]
+    if _run_lock_held(agent_dir / "hosts" / meta["hostname"] / "run.lock"):
+        raise ValueError("Cannot delete an agent while its run lock is held.")
+    if not force and status not in _TERMINAL_STATES:
+        raise ValueError(
+            "Refusing to delete a non-terminal agent. Cancel it first or use --force."
+        )
+    if not force and snapshot["child_ids"]:
+        raise ValueError(
+            "Refusing to delete an agent that still has child agents. Use --force if you really want to remove it."
+        )
+    shutil.rmtree(agent_dir)
+    return {
+        "deleted": True,
+        "id": snapshot["id"],
+        "name": snapshot["name"],
+        "status": status,
+        "path": str(agent_dir),
+        "forced": bool(force),
+    }
 
 
 def nudge_agent(agent_ref, home=None, hostname=None, now=None, runner=None):
@@ -943,6 +973,12 @@ def _write_lock_info(handle, hostname, now):
     handle.truncate()
     handle.write(json.dumps({"pid": os.getpid(), "hostname": hostname, "started_at": format_utc(now)}))
     handle.flush()
+
+
+def _run_lock_held(path):
+    """Return true when the per-agent run lock is currently held."""
+    with _try_lock(path) as handle:
+        return handle is None
 
 
 def _read_session(agent_dir):

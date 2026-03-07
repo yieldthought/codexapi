@@ -53,6 +53,7 @@ Cursor agent backend.
 After installing, use the `codexapi` command:
 
 ```bash
+codexapi --version
 codexapi run "Summarize this repo."
 codexapi run --cwd /path/to/project "Fix the failing tests."
 echo "Say hello." | codexapi run
@@ -185,6 +186,7 @@ codexapi agent wake ci-fixer
 codexapi agent pause ci-fixer
 codexapi agent resume ci-fixer
 codexapi agent cancel ci-fixer
+codexapi agent delete ci-fixer
 ```
 
 Create a child agent explicitly:

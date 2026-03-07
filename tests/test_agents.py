@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from codexapi import __version__
 from codexapi.agents import (
     _codex_rollout_usage,
     _tick_lock_path,
@@ -19,6 +20,7 @@ from codexapi.agents import (
     _remove_cron_line,
     _upsert_cron_line,
     control_agent,
+    delete_agent,
     format_utc,
     install_cron,
     nudge_agent,
@@ -48,6 +50,14 @@ def _temp_home():
 
 
 class AgentsTests(unittest.TestCase):
+    def test_cli_version(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as exc:
+                cli_main(["--version"])
+        self.assertEqual(exc.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(), f"codexapi {__version__}")
+
     def test_current_hostname_prefers_override(self):
         with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "stable-host"}, clear=False):
             from codexapi.agents import current_hostname
@@ -91,6 +101,69 @@ class AgentsTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Agentbook:", text)
             self.assertIn("# Agentbook", text)
+
+    def test_delete_agent_removes_done_agent(self):
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Finished",
+                        "continue": False,
+                        "reply": "done",
+                    }
+                ),
+                "thread_id": "thread-delete",
+            }
+
+        with _temp_home():
+            agent = start_agent("Finish then delete.", hostname="host-a")
+            tick(hostname="host-a", runner=fake_runner)
+            result = delete_agent(agent["id"])
+            self.assertTrue(result["deleted"])
+            with self.assertRaises(ValueError):
+                show_agent(agent["id"])
+
+    def test_delete_agent_refuses_non_terminal_without_force(self):
+        with _temp_home():
+            agent = start_agent("Do not delete me yet.", hostname="host-a")
+            with self.assertRaises(ValueError):
+                delete_agent(agent["id"])
+            result = delete_agent(agent["id"], force=True)
+            self.assertTrue(result["forced"])
+
+    def test_delete_agent_refuses_when_run_lock_held(self):
+        with _temp_home() as home:
+            agent = start_agent("Locked agent.", hostname="host-a")
+            agent_dir = home / "agents" / agent["id"]
+            lock_path = agent_dir / "hosts" / "host-a" / "run.lock"
+            with _try_lock(lock_path) as handle:
+                self.assertIsNotNone(handle)
+                with self.assertRaises(ValueError):
+                    delete_agent(agent["id"], force=True)
+
+    def test_cli_delete_removes_agent(self):
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Finished",
+                        "continue": False,
+                        "reply": "done",
+                    }
+                ),
+                "thread_id": "thread-delete-cli",
+            }
+
+        with _temp_home():
+            agent = start_agent("Finish then delete.", hostname="host-a")
+            tick(hostname="host-a", runner=fake_runner)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli_main(["agent", "delete", agent["id"]])
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["deleted"])
+            with self.assertRaises(ValueError):
+                show_agent(agent["id"])
 
     def test_cross_host_message_waits_for_owner_tick(self):
         prompts = []

@@ -649,6 +649,7 @@ V1 CLI surface:
 - `codexapi agent pause`
 - `codexapi agent resume`
 - `codexapi agent cancel`
+- `codexapi agent delete`
 - `codexapi agent tick`
 - `codexapi agent install-cron`
 
@@ -662,6 +663,7 @@ Expected behavior:
 - `book` prints the current `AGENTBOOK.md` text for one agent
 - `show` reads one agent's current snapshot and recent run history
 - `send`, `wake`, `pause`, `resume`, and `cancel` create durable command files
+- `delete` removes one agent directory when it is safe to do so
 - `tick` processes due agents for the current hostname only
 - `install-cron` installs exactly one scheduler entry for this home on this host
 

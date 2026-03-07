@@ -12,11 +12,13 @@ import tty
 from datetime import datetime
 from pathlib import Path
 
+from . import __version__
 from .agent import Agent, agent
 from .agents import (
     codexapi_home,
     control_agent,
     current_hostname,
+    delete_agent as delete_managed_agent,
     install_cron as install_agent_cron,
     list_agents as list_managed_agents,
     nudge_agent,
@@ -1299,6 +1301,11 @@ def main(argv=None):
         prog="codexapi",
         description="Run agent backends via the codexapi wrapper.",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(
@@ -1489,6 +1496,17 @@ def main(argv=None):
         subparser = agent_subparsers.add_parser(subcommand, help=help_text)
         subparser.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
         subparser.add_argument("--author", help="Author label for the command.")
+
+    agent_delete = agent_subparsers.add_parser(
+        "delete",
+        help="Delete one durable agent and its files.",
+    )
+    agent_delete.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+    agent_delete.add_argument(
+        "--force",
+        action="store_true",
+        help="Delete even when the agent is not terminal or still has children.",
+    )
 
     agent_subparsers.add_parser(
         "tick",
@@ -1851,6 +1869,15 @@ def main(argv=None):
             )
             result["nudge"] = nudge_agent(args.agent_ref)
             print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command == "delete":
+            print(
+                json.dumps(
+                    delete_managed_agent(args.agent_ref, args.force),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return
         if args.agent_command == "tick":
             print(json.dumps(tick_managed_agents(), indent=2, sort_keys=True))
