@@ -21,6 +21,7 @@ from .agents import (
     list_agents as list_managed_agents,
     nudge_agent,
     read_agent as read_managed_agent,
+    read_agentbook,
     send_agent,
     show_agent as show_managed_agent,
     start_agent as start_managed_agent,
@@ -226,6 +227,7 @@ def _print_managed_agent_show(result):
         f"Policy: {meta['stop_policy']}  Heartbeat: {meta['heartbeat_minutes']}m  Unread: {result['unread_message_count']}"
     )
     print(f"CWD: {meta['cwd']}")
+    print(f"Agentbook: {result.get('agentbook_path') or '-'}")
     print(f"Thread: {state.get('thread_id') or '-'}")
     print(
         "Tokens: "
@@ -249,6 +251,17 @@ def _print_managed_agent_show(result):
     print("Recent runs:")
     for run in recent_runs:
         print(_format_managed_agent_run(run))
+
+
+def _print_managed_agent_book(result):
+    print(f"Agentbook: {result['path']}")
+    text = result.get("text") or ""
+    if text:
+        print()
+        print(text, end="" if text.endswith("\n") else "\n")
+        return
+    print()
+    print("(empty)")
 
 
 
@@ -1453,6 +1466,12 @@ def main(argv=None):
         help="Maximum number of items to show (default: 10).",
     )
 
+    agent_book = agent_subparsers.add_parser(
+        "book",
+        help="Show the current agentbook for one agent.",
+    )
+    agent_book.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+
     agent_send = agent_subparsers.add_parser(
         "send",
         help="Queue a message for an agent.",
@@ -1812,6 +1831,9 @@ def main(argv=None):
             if args.limit < 1:
                 raise SystemExit("--limit must be >= 1.")
             _print_managed_agent_read(read_managed_agent(args.agent_ref, args.limit))
+            return
+        if args.agent_command == "book":
+            _print_managed_agent_book(read_agentbook(args.agent_ref))
             return
         if args.agent_command == "send":
             result = send_agent(args.agent_ref, args.message, args.author)

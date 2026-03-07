@@ -23,6 +23,7 @@ from codexapi.agents import (
     install_cron,
     nudge_agent,
     read_agent,
+    read_agentbook,
     render_cron_line,
     send_agent,
     show_agent,
@@ -70,11 +71,26 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(first["name"], "monitor-the-build-queue")
             agents_a = show_agent(first["id"])
             self.assertEqual(agents_a["meta"]["hostname"], "host-a")
+            self.assertTrue(agents_a["agentbook_path"].endswith("/AGENTBOOK.md"))
         with _temp_home() as home_b:
             with self.assertRaises(ValueError):
                 show_agent(first["id"])
             second = start_agent("Watch CI failures.", hostname="host-b")
             self.assertNotEqual(first["id"], second["id"])
+
+    def test_read_agentbook_and_cli_book(self):
+        with _temp_home():
+            agent = start_agent("Keep notes.", hostname="host-a")
+            book = read_agentbook(agent["id"])
+            self.assertTrue(book["path"].endswith("/AGENTBOOK.md"))
+            self.assertIn("# Agentbook", book["text"])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli_main(["agent", "book", agent["id"]])
+            text = output.getvalue()
+            self.assertIn("Agentbook:", text)
+            self.assertIn("# Agentbook", text)
 
     def test_cross_host_message_waits_for_owner_tick(self):
         prompts = []

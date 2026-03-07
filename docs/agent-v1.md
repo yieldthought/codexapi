@@ -642,6 +642,7 @@ V1 CLI surface:
 - `codexapi agent list`
 - `codexapi agent whoami`
 - `codexapi agent read`
+- `codexapi agent book`
 - `codexapi agent show`
 - `codexapi agent send`
 - `codexapi agent wake`
@@ -658,6 +659,7 @@ Expected behavior:
 - `whoami` prints the effective host identity and `CODEXAPI_HOME`
 - `read` shows recent user-visible communication derived from state and run
   records
+- `book` prints the current `AGENTBOOK.md` text for one agent
 - `show` reads one agent's current snapshot and recent run history
 - `send`, `wake`, `pause`, `resume`, and `cancel` create durable command files
 - `tick` processes due agents for the current hostname only

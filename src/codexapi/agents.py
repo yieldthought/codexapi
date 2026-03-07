@@ -214,6 +214,7 @@ def show_agent(agent_ref, home=None):
     child_map = _child_map(home)
     agent_dir = resolve_agent_dir(agent_ref, home)
     snapshot = _snapshot(agent_dir, child_map)
+    snapshot["agentbook_path"] = str(agent_dir / "AGENTBOOK.md")
     snapshot["meta"] = _read_json(agent_dir / "meta.json")
     snapshot["state"] = _read_json(agent_dir / "state.json")
     snapshot["state"]["child_ids"] = snapshot["child_ids"]
@@ -281,6 +282,17 @@ def read_agent(agent_ref, limit=10, home=None):
         "name": meta["name"],
         "status": state.get("status") or "",
         "items": items[-limit:],
+    }
+
+
+def read_agentbook(agent_ref, home=None):
+    """Return the current agentbook path and text for one agent."""
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    path = agent_dir / "AGENTBOOK.md"
+    return {
+        "id": _read_json(agent_dir / "meta.json")["id"],
+        "path": str(path),
+        "text": _read_text(path),
     }
 
 

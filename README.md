@@ -179,6 +179,7 @@ Inspect and talk to agents:
 codexapi agent list
 codexapi agent show ci-fixer
 codexapi agent read ci-fixer
+codexapi agent book ci-fixer
 codexapi agent send ci-fixer "Prefer the smallest safe fix."
 codexapi agent wake ci-fixer
 codexapi agent pause ci-fixer
@@ -203,6 +204,9 @@ CODEXAPI_HOSTNAME=stable-host codexapi agent whoami
 `CODEXAPI_HOME` isolates independent agent installations and is the right seam
 for tests. `CODEXAPI_HOSTNAME` is useful when cron, shells, sandboxes, or test
 wrappers report inconsistent hostnames for the same machine.
+
+`codexapi agent show` also prints the resolved `AGENTBOOK.md` path so you can
+jump directly to the durable working memory file.
 
 See [docs/agent-v1.md](docs/agent-v1.md) for the filesystem model and scheduling
 details.
