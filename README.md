@@ -141,13 +141,71 @@ If the leadbook does not exist, lead creates it with a template.
 
 ```bash
 codexapi lead 5 "Run the benchmark and wait for results."
-
-Run without waiting between check-ins:
-
-```bash
 codexapi lead 0 "Do a rapid triage pass and report."
 ```
+
+### Durable agents
+
+`codexapi agent` is the durable long-running control plane. It stores state
+under `CODEXAPI_HOME` (default `~/.codexapi`), wakes agents on cron, and lets
+you inspect or message them from any shell that points at the same home.
+
+Start by checking the effective host/home pair and installing the scheduler:
+
+```bash
+codexapi agent whoami
+codexapi agent install-cron
 ```
+
+Start a goal-directed agent that decides for itself when it is done:
+
+```bash
+codexapi agent start --name ci-fixer \
+  "Watch CI, fix failing tests, open or update a PR, and stop when the work is done."
+```
+
+Start a persistent watcher that keeps running until you stop it:
+
+```bash
+codexapi agent start --name issue-watcher \
+  --stop-policy until_stopped \
+  --heartbeat-minutes 30 \
+  "Every wake, scan for newly assigned issues that look actionable and report or start follow-up work."
+```
+
+Inspect and talk to agents:
+
+```bash
+codexapi agent list
+codexapi agent show ci-fixer
+codexapi agent read ci-fixer
+codexapi agent send ci-fixer "Prefer the smallest safe fix."
+codexapi agent wake ci-fixer
+codexapi agent pause ci-fixer
+codexapi agent resume ci-fixer
+codexapi agent cancel ci-fixer
+```
+
+Create a child agent explicitly:
+
+```bash
+codexapi agent start --name child-fix --parent ci-fixer \
+  "Investigate the flaky integration test and report back."
+```
+
+Useful environment overrides:
+
+```bash
+CODEXAPI_HOME=/tmp/codexapi-test-home codexapi agent list
+CODEXAPI_HOSTNAME=stable-host codexapi agent whoami
+```
+
+`CODEXAPI_HOME` isolates independent agent installations and is the right seam
+for tests. `CODEXAPI_HOSTNAME` is useful when cron, shells, sandboxes, or test
+wrappers report inconsistent hostnames for the same machine.
+
+See [docs/agent-v1.md](docs/agent-v1.md) for the filesystem model and scheduling
+details.
 
 Ralph loop mode repeats the same prompt until a completion promise or a max
 iteration cap is hit (0 means unlimited). Cancel by deleting
