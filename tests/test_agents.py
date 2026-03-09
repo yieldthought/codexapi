@@ -1,10 +1,12 @@
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from contextlib import redirect_stderr
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -663,6 +665,98 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(shown["state"]["reply"], "Used rollout tokens.")
             self.assertIn("thread-rollout", shown["session"]["rollout_path"])
 
+    def test_start_agent_replays_start_time_env_on_later_wakes(self):
+        captured = {}
+
+        with _temp_home():
+            with patch.dict(
+                os.environ,
+                {
+                    "CUSTOM_AGENT_ENV": "expected-value",
+                    "GH_TOKEN": "ghp-test-token",
+                },
+                clear=False,
+            ):
+                agent = start_agent(
+                    "Use my saved environment.",
+                    hostname="host-a",
+                )
+
+            class FakeAgent:
+                def __init__(
+                    self,
+                    cwd=None,
+                    yolo=True,
+                    thread_id=None,
+                    flags=None,
+                    include_thinking=False,
+                    backend=None,
+                    env=None,
+                ):
+                    captured["env"] = dict(env or {})
+                    self.thread_id = thread_id
+                    self.last_usage = {}
+
+                def __call__(self, prompt):
+                    return json.dumps(
+                        {
+                            "status": "Handled with saved env",
+                            "continue": False,
+                            "reply": "done",
+                        }
+                    )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "CUSTOM_AGENT_ENV": "different-value",
+                    "GH_TOKEN": "",
+                },
+                clear=False,
+            ):
+                with patch("codexapi.agents.Agent", FakeAgent):
+                    nudge_agent(agent["id"], hostname="host-a")
+
+            self.assertEqual(captured["env"]["CUSTOM_AGENT_ENV"], "expected-value")
+            self.assertEqual(captured["env"]["GH_TOKEN"], "ghp-test-token")
+
+    def test_start_agent_captures_gh_token_when_env_is_missing(self):
+        with _temp_home():
+            with patch.dict(
+                os.environ,
+                {"GH_TOKEN": "", "GITHUB_TOKEN": ""},
+                clear=False,
+            ):
+                with patch("codexapi.agents.shutil.which", return_value="/usr/bin/gh"):
+                    with patch(
+                        "codexapi.agents.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            ["gh", "auth", "token"],
+                            0,
+                            stdout="gho-from-gh-auth\n",
+                            stderr="",
+                        ),
+                    ):
+                        agent = start_agent(
+                            "Use GitHub from cron.",
+                            hostname="host-a",
+                        )
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["session"]["env"]["GH_TOKEN"], "gho-from-gh-auth")
+
+    def test_start_agent_keeps_existing_gh_token_without_calling_gh(self):
+        with _temp_home():
+            with patch.dict(os.environ, {"GH_TOKEN": "existing-gh-token"}, clear=False):
+                with patch("codexapi.agents.shutil.which", return_value="/usr/bin/gh"):
+                    with patch("codexapi.agents.subprocess.run") as run_mock:
+                        agent = start_agent(
+                            "Use existing GitHub token.",
+                            hostname="host-a",
+                        )
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["session"]["env"]["GH_TOKEN"], "existing-gh-token")
+            run_mock.assert_not_called()
+
     def test_cli_managed_agent_views_show_operator_fields(self):
         start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
         end = start + timedelta(hours=1)
@@ -717,7 +811,38 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("Recent runs:", text)
             self.assertIn("msgs=1", text)
 
-    def test_cli_send_shows_immediate_agent_reply(self):
+    def test_cli_start_warns_when_cron_missing(self):
+        with _temp_home() as home:
+            output = io.StringIO()
+            errors = io.StringIO()
+            with patch("codexapi.cli.agent_cron_installed", return_value=False):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    cli_main(["agent", "start", "Handle messages."])
+            payload = json.loads(output.getvalue())
+            self.assertFalse(payload["waited"])
+            warning = errors.getvalue()
+            self.assertIn("Background agent wakes will not run", warning)
+            self.assertIn(str(home), warning)
+            self.assertIn("codexapi agent install-cron", warning)
+
+    def test_cli_send_queues_by_default(self):
+        with _temp_home():
+            with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "host-a"}, clear=False):
+                agent = start_agent(
+                    "Handle messages.",
+                    hostname="host-a",
+                )
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    cli_main(["agent", "send", agent["id"], "status"])
+                payload = json.loads(output.getvalue())
+                self.assertFalse(payload["waited"])
+                self.assertNotIn("nudge", payload)
+                shown = show_agent(agent["id"])
+                self.assertEqual(shown["unread_message_count"], 1)
+                self.assertEqual(shown["state"]["status"], "ready")
+
+    def test_cli_send_wait_shows_immediate_agent_reply(self):
         with _temp_home():
             with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "host-a"}, clear=False):
                 agent = start_agent(
@@ -752,8 +877,9 @@ class AgentsTests(unittest.TestCase):
                 output = io.StringIO()
                 with patch("codexapi.agents.Agent", FakeAgent):
                     with redirect_stdout(output):
-                        cli_main(["agent", "send", agent["id"], "status"])
+                        cli_main(["agent", "send", "--wait", agent["id"], "status"])
                 payload = json.loads(output.getvalue())
+                self.assertTrue(payload["waited"])
                 self.assertTrue(payload["nudge"]["woken"])
                 self.assertTrue(payload["delivered"])
                 self.assertEqual(payload["agent_status"], "Answered immediately")

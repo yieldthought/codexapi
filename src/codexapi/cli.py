@@ -3,6 +3,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from .agent import Agent, agent
 from .agents import (
     codexapi_home,
     control_agent,
+    cron_installed as agent_cron_installed,
     current_hostname,
     delete_agent as delete_managed_agent,
     install_cron as install_agent_cron,
@@ -192,6 +194,39 @@ def _print_managed_agent_identity():
     print(f"Host: {current_hostname()}")
     print(f"Host override: {override or '-'}")
     print(f"Home: {codexapi_home()}")
+
+
+def _agent_install_cron_command():
+    parts = []
+    home = os.environ.get("CODEXAPI_HOME", "").strip()
+    host = os.environ.get("CODEXAPI_HOSTNAME", "").strip()
+    if home:
+        parts.append(f"CODEXAPI_HOME={shlex.quote(home)}")
+    if host:
+        parts.append(f"CODEXAPI_HOSTNAME={shlex.quote(host)}")
+    parts.extend(["codexapi", "agent", "install-cron"])
+    return " ".join(parts)
+
+
+def _warn_agent_scheduler_missing():
+    try:
+        installed = agent_cron_installed()
+    except Exception as exc:
+        print(
+            "Warning: could not verify whether the codexapi agent scheduler hook is installed.",
+            file=sys.stderr,
+        )
+        print(f"Reason: {exc}", file=sys.stderr)
+        print(f"Install it with: {_agent_install_cron_command()}", file=sys.stderr)
+        return
+    if installed:
+        return
+    print(
+        "Warning: no codexapi agent scheduler hook is installed for this CODEXAPI_HOME. "
+        "Background agent wakes will not run until you install it.",
+        file=sys.stderr,
+    )
+    print(f"Install it with: {_agent_install_cron_command()}", file=sys.stderr)
 
 
 def _send_reply_info(agent_ref, message_id):
@@ -1401,7 +1436,7 @@ def main(argv=None):
 
     agent_start = agent_subparsers.add_parser(
         "start",
-        help="Create a durable agent.",
+        help="Create a durable agent and return immediately unless --wait is set.",
     )
     agent_start.add_argument(
         "prompt",
@@ -1445,6 +1480,11 @@ def main(argv=None):
         "--flags",
         help="Additional raw CLI flags to pass to the backend.",
     )
+    agent_start.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for the first local wake to finish instead of just scheduling it.",
+    )
 
     agent_subparsers.add_parser(
         "list",
@@ -1481,21 +1521,32 @@ def main(argv=None):
 
     agent_send = agent_subparsers.add_parser(
         "send",
-        help="Queue a message for an agent.",
+        help="Queue a message for an agent and return immediately unless --wait is set.",
     )
     agent_send.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_send.add_argument("message", help="Message to queue.")
     agent_send.add_argument("--author", help="Author label for the message.")
+    agent_send.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for a local wake after queueing the message.",
+    )
 
     for subcommand, help_text in (
-        ("wake", "Request an extra wake for an agent."),
+        ("wake", "Request an extra wake for an agent and return immediately unless --wait is set."),
         ("pause", "Pause an agent."),
-        ("resume", "Resume a paused agent."),
+        ("resume", "Resume a paused agent and return immediately unless --wait is set."),
         ("cancel", "Cancel an agent."),
     ):
         subparser = agent_subparsers.add_parser(subcommand, help=help_text)
         subparser.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
         subparser.add_argument("--author", help="Author label for the command.")
+        if subcommand in ("wake", "resume"):
+            subparser.add_argument(
+                "--wait",
+                action="store_true",
+                help="Wait for a local wake after queueing the command.",
+            )
 
     agent_delete = agent_subparsers.add_parser(
         "delete",
@@ -1834,6 +1885,10 @@ def main(argv=None):
                 args.yolo,
                 args.flags,
             )
+            result["waited"] = bool(args.wait)
+            if args.wait:
+                result["nudge"] = nudge_agent(result["id"])
+            _warn_agent_scheduler_missing()
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command == "list":
@@ -1855,18 +1910,32 @@ def main(argv=None):
             return
         if args.agent_command == "send":
             result = send_agent(args.agent_ref, args.message, args.author)
-            result["nudge"] = nudge_agent(args.agent_ref)
-            reply_info = _send_reply_info(args.agent_ref, result["id"])
-            if reply_info:
-                result.update(reply_info)
+            result["waited"] = bool(args.wait)
+            if args.wait:
+                result["nudge"] = nudge_agent(args.agent_ref)
+                reply_info = _send_reply_info(args.agent_ref, result["id"])
+                if reply_info:
+                    result.update(reply_info)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
-        if args.agent_command in ("wake", "pause", "resume", "cancel"):
+        if args.agent_command in ("wake", "resume"):
             result = control_agent(
                 args.agent_ref,
                 args.agent_command,
                 args.author,
             )
+            result["waited"] = bool(args.wait)
+            if args.wait:
+                result["nudge"] = nudge_agent(args.agent_ref)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command in ("pause", "cancel"):
+            result = control_agent(
+                args.agent_ref,
+                args.agent_command,
+                args.author,
+            )
+            result["waited"] = False
             result["nudge"] = nudge_agent(args.agent_ref)
             print(json.dumps(result, indent=2, sort_keys=True))
             return

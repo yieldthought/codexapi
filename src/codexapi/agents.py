@@ -412,6 +412,17 @@ def install_cron(home=None, hostname=None, python_executable=None, path_value=No
     }
 
 
+def cron_installed(home=None, hostname=None):
+    """Return whether this home and host have an installed scheduler hook."""
+    home = _resolve_home(home)
+    host = hostname or current_hostname()
+    tag = _cron_tag(home, host)
+    wrapper = home / "bin" / "agent-tick"
+    crontab = _read_crontab()
+    installed = any(raw.strip().endswith(f"# {tag}") for raw in crontab.splitlines())
+    return installed and wrapper.exists()
+
+
 def uninstall_cron(home=None, hostname=None):
     """Remove the cron entry for this home and host."""
     home = _resolve_home(home)
@@ -915,11 +926,29 @@ def _resolve_cwd(cwd):
 
 def _capture_env():
     env = {}
-    for key in ("PATH", "VIRTUAL_ENV"):
-        value = os.environ.get(key)
-        if value:
-            env[key] = value
+    for key, value in os.environ.items():
+        if key in ("CODEXAPI_AGENT_ID", "CODEXAPI_AGENT_NAME", "CODEXAPI_AGENT_PARENT_ID"):
+            continue
+        env[key] = value
+    if not (env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")):
+        gh_token = _gh_auth_token()
+        if gh_token:
+            env["GH_TOKEN"] = gh_token
     return env
+
+
+def _gh_auth_token():
+    """Return the active gh auth token when available."""
+    if shutil.which("gh") is None:
+        return ""
+    result = subprocess.run(
+        ["gh", "auth", "token"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
 
 
 def _parent_identity(home, parent_ref):

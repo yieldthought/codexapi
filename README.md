@@ -158,12 +158,21 @@ codexapi agent whoami
 codexapi agent install-cron
 ```
 
+If you skip `install-cron`, `codexapi agent start` warns on stderr because
+background wakes will not run until the scheduler hook is installed.
+When `gh` is installed and authenticated, `agent start` also captures a
+background-safe `GH_TOKEN` automatically if your shell did not already export
+`GH_TOKEN` or `GITHUB_TOKEN`.
+
 Start a goal-directed agent that decides for itself when it is done:
 
 ```bash
 codexapi agent start --name ci-fixer \
   "Watch CI, fix failing tests, open or update a PR, and stop when the work is done."
 ```
+
+Add `--wait` if you want `start` to block for the first local wake instead of
+just scheduling it.
 
 Start a persistent watcher that keeps running until you stop it:
 
@@ -182,9 +191,12 @@ codexapi agent show ci-fixer
 codexapi agent read ci-fixer
 codexapi agent book ci-fixer
 codexapi agent send ci-fixer "Prefer the smallest safe fix."
+codexapi agent send --wait ci-fixer "Reply now if you can handle this immediately."
 codexapi agent wake ci-fixer
+codexapi agent wake --wait ci-fixer
 codexapi agent pause ci-fixer
 codexapi agent resume ci-fixer
+codexapi agent resume --wait ci-fixer
 codexapi agent cancel ci-fixer
 codexapi agent delete ci-fixer
 ```
