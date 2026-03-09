@@ -197,6 +197,7 @@ codexapi agent wake --wait ci-fixer
 codexapi agent pause ci-fixer
 codexapi agent resume ci-fixer
 codexapi agent resume --wait ci-fixer
+codexapi agent set-heartbeat ci-fixer 30
 codexapi agent cancel ci-fixer
 codexapi agent delete ci-fixer
 ```

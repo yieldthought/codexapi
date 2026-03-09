@@ -27,6 +27,7 @@ from .agents import (
     read_agent as read_managed_agent,
     read_agentbook,
     send_agent,
+    set_agent_heartbeat,
     show_agent as show_managed_agent,
     start_agent as start_managed_agent,
     tick as tick_managed_agents,
@@ -1548,6 +1549,20 @@ def main(argv=None):
                 help="Wait for a local wake after queueing the command.",
             )
 
+    agent_set_heartbeat = agent_subparsers.add_parser(
+        "set-heartbeat",
+        help="Update the heartbeat interval for one durable agent.",
+    )
+    agent_set_heartbeat.add_argument(
+        "agent_ref",
+        help="Agent id, unique prefix, or name.",
+    )
+    agent_set_heartbeat.add_argument(
+        "heartbeat_minutes",
+        type=int,
+        help="Heartbeat interval in minutes.",
+    )
+
     agent_delete = agent_subparsers.add_parser(
         "delete",
         help="Delete one durable agent and its files.",
@@ -1938,6 +1953,20 @@ def main(argv=None):
             result["waited"] = False
             result["nudge"] = nudge_agent(args.agent_ref)
             print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command == "set-heartbeat":
+            if args.heartbeat_minutes < 0:
+                raise SystemExit("heartbeat_minutes must be >= 0.")
+            print(
+                json.dumps(
+                    set_agent_heartbeat(
+                        args.agent_ref,
+                        args.heartbeat_minutes,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return
         if args.agent_command == "delete":
             print(

@@ -30,6 +30,7 @@ from codexapi.agents import (
     read_agentbook,
     render_cron_line,
     send_agent,
+    set_agent_heartbeat,
     show_agent,
     start_agent,
     tick,
@@ -337,6 +338,74 @@ class AgentsTests(unittest.TestCase):
             shown = show_agent(agent["id"])
             self.assertEqual(shown["state"]["status"], "ready")
             self.assertEqual(shown["state"]["thread_id"], "thread-xyz")
+
+    def test_set_agent_heartbeat_updates_meta_and_reschedules_idle_agent(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        end = start + timedelta(minutes=1)
+        now = start + timedelta(minutes=2)
+
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Handled",
+                        "continue": True,
+                        "reply": "Still watching.",
+                    }
+                ),
+                "thread_id": "thread-heartbeat",
+            }
+
+        with _temp_home():
+            agent = start_agent(
+                "Keep an eye on this.",
+                hostname="host-a",
+                heartbeat_minutes=30,
+                now=start,
+            )
+            with patch("codexapi.agents.utc_now", return_value=end):
+                nudge_agent(
+                    agent["id"],
+                    hostname="host-a",
+                    now=start,
+                    runner=fake_runner,
+                )
+            result = set_agent_heartbeat(
+                agent["id"],
+                10,
+                now=now,
+            )
+            shown = show_agent(agent["id"])
+            self.assertTrue(result["changed"])
+            self.assertTrue(result["rescheduled"])
+            self.assertFalse(result["running"])
+            self.assertEqual(result["heartbeat_minutes"], 10)
+            self.assertEqual(shown["meta"]["heartbeat_minutes"], 10)
+            self.assertEqual(
+                shown["state"]["next_wake_at"],
+                format_utc(now + timedelta(minutes=10)),
+            )
+
+    def test_set_agent_heartbeat_leaves_pending_wake_time_when_wake_requested(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        now = start + timedelta(minutes=1)
+
+        with _temp_home():
+            agent = start_agent(
+                "Keep an eye on this.",
+                hostname="host-a",
+                heartbeat_minutes=30,
+                now=start,
+            )
+            result = set_agent_heartbeat(
+                agent["id"],
+                10,
+                now=now,
+            )
+            shown = show_agent(agent["id"])
+            self.assertFalse(result["rescheduled"])
+            self.assertEqual(shown["state"]["wake_requested_at"], format_utc(start))
+            self.assertEqual(shown["state"]["next_wake_at"], format_utc(start))
 
     def test_tick_lock_is_non_blocking(self):
         with _temp_home() as home:
@@ -884,6 +953,27 @@ class AgentsTests(unittest.TestCase):
                 self.assertTrue(payload["delivered"])
                 self.assertEqual(payload["agent_status"], "Answered immediately")
                 self.assertEqual(payload["agent_reply"], "I saw your note.")
+
+    def test_cli_set_heartbeat_updates_agent(self):
+        start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
+        later = start + timedelta(minutes=3)
+
+        with _temp_home():
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+                heartbeat_minutes=30,
+                now=start,
+            )
+            output = io.StringIO()
+            with patch("codexapi.agents.utc_now", return_value=later):
+                with redirect_stdout(output):
+                    cli_main(["agent", "set-heartbeat", agent["id"], "12"])
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["changed"])
+            self.assertEqual(payload["heartbeat_minutes"], 12)
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["meta"]["heartbeat_minutes"], 12)
 
 
 if __name__ == "__main__":

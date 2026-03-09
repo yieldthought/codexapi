@@ -319,6 +319,51 @@ def control_agent(agent_ref, kind, author=None, home=None, hostname=None, now=No
     return _queue_command(agent_ref, kind, "", author, home, hostname, now)
 
 
+def set_agent_heartbeat(agent_ref, heartbeat_minutes, home=None, now=None):
+    """Update an agent heartbeat interval."""
+    if heartbeat_minutes < 0:
+        raise ValueError("heartbeat_minutes must be >= 0")
+    home = _resolve_home(home)
+    now = now or utc_now()
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    meta_path = agent_dir / "meta.json"
+    state_path = agent_dir / "state.json"
+    meta = _read_json(meta_path)
+    state = _read_json(state_path)
+    new_minutes = int(heartbeat_minutes)
+    old_minutes = int(meta.get("heartbeat_minutes") or 0)
+    changed = old_minutes != new_minutes
+    if changed:
+        meta["heartbeat_minutes"] = new_minutes
+        _write_json(meta_path, meta)
+    run_lock_path = agent_dir / "hosts" / meta["hostname"] / "run.lock"
+    running = _run_lock_held(run_lock_path)
+    rescheduled = False
+    if (
+        not running
+        and state.get("status") in ("ready", "error")
+        and not state.get("wake_requested_at")
+        and state.get("next_wake_at")
+    ):
+        state["next_wake_at"] = format_utc(
+            now + timedelta(minutes=new_minutes)
+        )
+        _write_json(state_path, state)
+        rescheduled = True
+    return {
+        "id": meta["id"],
+        "name": meta["name"],
+        "status": state.get("status") or "",
+        "old_heartbeat_minutes": old_minutes,
+        "heartbeat_minutes": new_minutes,
+        "changed": changed,
+        "running": running,
+        "rescheduled": rescheduled,
+        "applies_after_current_run": bool(running),
+        "next_wake_at": state.get("next_wake_at") or "",
+    }
+
+
 def delete_agent(agent_ref, force=False, home=None):
     """Delete one agent directory when it is safe to do so."""
     home = _resolve_home(home)
