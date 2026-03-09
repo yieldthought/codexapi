@@ -547,9 +547,10 @@ Processing rules:
 - commands are applied in timestamp order
 - `pause` and `cancel` are applied before starting a new backend wake
 - `send` contributes to the next prompt and increments unread counts until
-  consumed
+  consumed; `done` and `canceled` agents still process queued messages as a
+  one-off wake
 - `wake` means run soon even if no heartbeat is due
-- `resume` only changes state when the agent is paused
+- `resume` reopens a `paused` or `done` agent
 - after successful application, the owner host records the result in state or a
   run record and deletes the claimed file
 
@@ -644,6 +645,7 @@ V1 CLI surface:
 - `codexapi agent read`
 - `codexapi agent book`
 - `codexapi agent show`
+- `codexapi agent status`
 - `codexapi agent send`
 - `codexapi agent wake`
 - `codexapi agent pause`

@@ -188,6 +188,8 @@ Inspect and talk to agents:
 ```bash
 codexapi agent list
 codexapi agent show ci-fixer
+codexapi agent status ci-fixer
+codexapi agent status --actions ci-fixer
 codexapi agent read ci-fixer
 codexapi agent book ci-fixer
 codexapi agent send ci-fixer "Prefer the smallest safe fix."
@@ -201,6 +203,10 @@ codexapi agent set-heartbeat ci-fixer 30
 codexapi agent cancel ci-fixer
 codexapi agent delete ci-fixer
 ```
+
+`codexapi agent resume` can reopen a `done` agent. Sending to a `done` or
+`canceled` agent still triggers a one-off wake on the next tick so you can get
+a reply without putting the agent back into continuous heartbeat mode.
 
 Create a child agent explicitly:
 
@@ -222,6 +228,10 @@ wrappers report inconsistent hostnames for the same machine.
 
 `codexapi agent show` also prints the resolved `AGENTBOOK.md` path so you can
 jump directly to the durable working memory file.
+`codexapi agent status` reads the latest turn from the agent's rollout log and
+shows recent commentary plus the final visible output. Pass `--actions` to
+include the tool-action summary. If a wake is still in progress, it shows the
+active turn so far.
 
 See [docs/agent-v1.md](docs/agent-v1.md) for the filesystem model and scheduling
 details.

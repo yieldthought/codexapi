@@ -227,6 +227,48 @@ def show_agent(agent_ref, home=None):
     return snapshot
 
 
+def status_agent(agent_ref, home=None, include_actions=False):
+    """Return detailed transcript status for the latest agent turn."""
+    home = _resolve_home(home)
+    child_map = _child_map(home)
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    snapshot = _snapshot(agent_dir, child_map)
+    session = _read_session(agent_dir)
+    rollout_path = _resolve_rollout_path(
+        session.get("rollout_path"),
+        session.get("thread_id") or snapshot.get("thread_id") or "",
+    )
+    result = {
+        "id": snapshot["id"],
+        "name": snapshot["name"],
+        "agent_status": snapshot["status"],
+        "thread_id": session.get("thread_id") or snapshot.get("thread_id") or "",
+        "rollout_path": str(rollout_path) if rollout_path else "",
+        "turn_id": "",
+        "turn_state": "missing",
+        "started_at": "",
+        "ended_at": "",
+        "cwd": snapshot.get("cwd") or "",
+        "progress": [],
+        "tools": [],
+        "final_output": "",
+        "final_json": None,
+    }
+    if rollout_path is None or not rollout_path.exists():
+        return result
+    events = _rollout_events(rollout_path)
+    turn = _last_rollout_turn(events, include_actions)
+    if turn is None:
+        return result
+    run_lock_path = agent_dir / "hosts" / snapshot["hostname"] / "run.lock"
+    turn_state = "complete"
+    if not turn["ended_at"]:
+        turn_state = "active" if _run_lock_held(run_lock_path) else "interrupted"
+    result.update(turn)
+    result["turn_state"] = turn_state
+    return result
+
+
 def read_agent(agent_ref, limit=10, home=None):
     """Return recent user-visible communication for an agent."""
     agent_dir = resolve_agent_dir(agent_ref, home)
@@ -567,15 +609,16 @@ def _tick_agent(agent_dir, now, runner):
             _sync_state_from_session(state, session)
             _write_json(session_path, session)
             _write_json(agent_dir / "state.json", state)
-        if state.get("status") not in ("ready", "error"):
+        terminal_status = _one_shot_terminal_status(state)
+        if state.get("status") not in ("ready", "error") and not terminal_status:
             return {"processed": bool(commands), "woken": False}
         if not _is_due(state, now):
             return {"processed": bool(commands), "woken": False}
-        _wake_agent(agent_dir, meta, state, session, now, commands, runner)
+        _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal_status)
         return {"processed": True, "woken": True}
 
 
-def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
+def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal_status=""):
     prompt = _build_wake_prompt(meta, state, session, now, commands, agent_dir)
     state["status"] = "running"
     state["last_wake_at"] = format_utc(now)
@@ -623,7 +666,10 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
         state["thread_id"] = session["thread_id"]
         state["wake_requested_at"] = ""
         state["activity"] = response["status"]
-        if response["continue"]:
+        if terminal_status:
+            state["status"] = terminal_status
+            state["next_wake_at"] = ""
+        elif response["continue"]:
             state["status"] = "ready"
             state["next_wake_at"] = format_utc(
                 ended + timedelta(minutes=meta["heartbeat_minutes"])
@@ -647,13 +693,16 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner):
             Pushover().send(title, response["notify"])
     except Exception as exc:
         ended = utc_now()
-        state["status"] = "error"
+        state["status"] = terminal_status or "error"
         state["last_error"] = _single_line(str(exc)) or exc.__class__.__name__
         state["activity"] = state["last_error"]
         state["wake_requested_at"] = ""
-        state["next_wake_at"] = format_utc(
-            ended + timedelta(minutes=meta["heartbeat_minutes"])
-        )
+        if terminal_status:
+            state["next_wake_at"] = ""
+        else:
+            state["next_wake_at"] = format_utc(
+                ended + timedelta(minutes=meta["heartbeat_minutes"])
+            )
         _sync_state_from_session(state, session)
         _write_json(agent_dir / "hosts" / meta["hostname"] / "session.json", session)
         _write_json(agent_dir / "state.json", state)
@@ -812,11 +861,11 @@ def _apply_commands(meta, state, session, commands, now):
             state["activity"] = "Paused"
             changed = True
         elif kind == "resume":
-            if state.get("status") == "paused":
+            if state.get("status") in ("paused", "done"):
                 state["status"] = "ready"
-            state["wake_requested_at"] = format_utc(now)
-            state["activity"] = "Resumed"
-            changed = True
+                state["wake_requested_at"] = format_utc(now)
+                state["activity"] = "Resumed"
+                changed = True
         elif kind == "cancel":
             state["status"] = "canceled"
             state["activity"] = "Canceled"
@@ -837,6 +886,8 @@ def _apply_commands(meta, state, session, commands, now):
 
 def _is_due(state, now):
     status = state.get("status")
+    if status in ("done", "canceled") and int(state.get("unread_message_count") or 0) > 0:
+        return True
     if status not in ("ready", "error"):
         return False
     if state.get("wake_requested_at"):
@@ -847,6 +898,16 @@ def _is_due(state, now):
     if next_wake and next_wake <= now:
         return True
     return False
+
+
+def _one_shot_terminal_status(state):
+    """Return the terminal status when a one-off message wake should run."""
+    status = state.get("status") or ""
+    if status not in _TERMINAL_STATES:
+        return ""
+    if int(state.get("unread_message_count") or 0) < 1:
+        return ""
+    return status
 
 
 def _write_run(agent_dir, hostname, payload):
@@ -1327,8 +1388,10 @@ def _resolve_rollout_path(known_path, thread_id):
     """Return the rollout file for a thread, preferring the cached session path."""
     if known_path:
         path = Path(known_path)
-        if path.exists() and thread_id in path.name:
+        if path.exists() and (not thread_id or thread_id in path.name):
             return path
+    if not thread_id:
+        return None
     root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
     if not root.exists():
         return None
@@ -1378,6 +1441,256 @@ def _extract_rollout_usage(path, started_at):
     except OSError:
         return {}
     return latest
+
+
+def _rollout_events(path):
+    """Return parsed JSONL events from one rollout file."""
+    events = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+    except OSError:
+        return []
+    return events
+
+
+def _last_rollout_turn(events, include_actions=False):
+    """Return the latest task_started slice from rollout events."""
+    turn_events = []
+    for event in events:
+        payload = event.get("payload") or {}
+        if event.get("type") == "event_msg" and payload.get("type") == "task_started":
+            turn_events = [event]
+            continue
+        if turn_events:
+            turn_events.append(event)
+    if not turn_events:
+        return None
+
+    started = turn_events[0]
+    started_payload = started.get("payload") or {}
+    progress_events = []
+    assistant_events = []
+    tools = []
+    tool_by_call_id = {}
+    ended_at = ""
+    task_complete_message = ""
+
+    for event in turn_events:
+        payload = event.get("payload") or {}
+        event_type = event.get("type")
+        payload_type = payload.get("type")
+        if event_type == "event_msg":
+            if payload_type == "agent_message":
+                item = {
+                    "text": str(payload.get("message") or "").strip(),
+                    "phase": payload.get("phase") or "",
+                }
+                if item["text"]:
+                    progress_events.append(item)
+            elif payload_type == "task_complete":
+                ended_at = event.get("timestamp") or ""
+                task_complete_message = str(payload.get("last_agent_message") or "").strip()
+        elif event_type == "response_item":
+            if payload_type == "message" and payload.get("role") == "assistant":
+                text = _response_message_text(payload)
+                if text:
+                    assistant_events.append(
+                        {
+                            "text": text,
+                            "phase": payload.get("phase") or "",
+                        }
+                    )
+            elif include_actions and payload_type in ("function_call", "custom_tool_call"):
+                tool = _rollout_tool_call(payload)
+                if tool is None:
+                    continue
+                tools.append(tool)
+                call_id = tool.get("call_id") or ""
+                if call_id:
+                    tool_by_call_id[call_id] = tool
+            elif include_actions and payload_type in ("function_call_output", "custom_tool_call_output"):
+                tool = tool_by_call_id.get(payload.get("call_id") or "")
+                if tool is not None:
+                    _apply_rollout_tool_output(tool, payload)
+
+    visible = progress_events or assistant_events
+    progress = [item["text"] for item in visible]
+    final_output = visible[-1]["text"] if visible else task_complete_message
+    final_json = None
+    if final_output:
+        final_json = _parse_rollout_final_json(final_output)
+        if progress and progress[-1] == final_output and (
+            final_json is not None or (visible[-1].get("phase") or "") == "final_answer"
+        ):
+            progress = progress[:-1]
+
+    if include_actions:
+        for tool in tools:
+            tool["summary"] = _rollout_tool_summary(tool)
+
+    return {
+        "turn_id": started_payload.get("turn_id") or "",
+        "started_at": started.get("timestamp") or "",
+        "ended_at": ended_at,
+        "progress": progress,
+        "tools": tools,
+        "final_output": final_output,
+        "final_json": final_json,
+    }
+
+
+def _response_message_text(payload):
+    """Return the text content from one assistant response message."""
+    parts = []
+    for item in payload.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+def _rollout_tool_call(payload):
+    """Return a compact tool-call record for one rollout item."""
+    name = payload.get("name") or ""
+    kind = payload.get("type") or ""
+    call_id = payload.get("call_id") or ""
+    tool = {
+        "call_id": call_id,
+        "kind": kind,
+        "name": name,
+        "command": "",
+        "files": [],
+        "exit_code": None,
+        "output": "",
+        "summary": "",
+    }
+    if kind == "function_call":
+        arguments = _parse_rollout_json(payload.get("arguments"))
+        if isinstance(arguments, dict):
+            tool["command"] = str(arguments.get("cmd") or "").strip()
+    elif kind == "custom_tool_call" and name == "apply_patch":
+        tool["files"] = _patch_targets(payload.get("input") or "")
+    return tool
+
+
+def _apply_rollout_tool_output(tool, payload):
+    """Fold tool output into a compact rollout tool record."""
+    text, exit_code = _tool_output_details(payload.get("output"))
+    if exit_code is not None:
+        tool["exit_code"] = exit_code
+    tool["output"] = _snippet(text.strip(), 400) if text else ""
+    if tool["name"] == "apply_patch" and not tool["files"]:
+        tool["files"] = _updated_files(text)
+
+
+def _parse_rollout_json(value):
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _parse_rollout_final_json(text):
+    """Return the normalized final agent JSON when the text matches the contract."""
+    try:
+        return _parse_agent_response(text)
+    except ValueError:
+        return None
+
+
+def _tool_output_details(output):
+    """Return normalized output text and exit code from a rollout tool result."""
+    text = str(output or "")
+    payload = _parse_rollout_json(text)
+    exit_code = None
+    if isinstance(payload, dict):
+        metadata = payload.get("metadata") or {}
+        exit_code = _usage_int(metadata.get("exit_code"))
+        text = str(payload.get("output") or "")
+    raw = text
+    body = raw
+    if "\nOutput:\n" in raw:
+        body = raw.split("\nOutput:\n", 1)[1]
+    elif raw.startswith("Output:\n"):
+        body = raw.split("Output:\n", 1)[1]
+    for line in raw.splitlines():
+        if not line.startswith("Process exited with code "):
+            continue
+        tail = line.rsplit(" ", 1)[-1].strip()
+        if tail.startswith("-"):
+            tail = tail[1:]
+        if tail.isdigit():
+            exit_code = int(line.rsplit(" ", 1)[-1].strip())
+            break
+    return body.strip(), exit_code
+
+
+def _rollout_tool_summary(tool):
+    """Return one readable summary line for a tool action."""
+    name = tool.get("name") or ""
+    exit_code = tool.get("exit_code")
+    suffix = ""
+    if exit_code is not None:
+        suffix = f" (exit {exit_code})"
+    if name == "exec_command":
+        command = _single_line(_snippet(tool.get("command") or "", 140))
+        if command:
+            return f"Running command: {command}{suffix}"
+        return f"Running command{suffix}"
+    if name == "apply_patch":
+        files = tool.get("files") or []
+        if files:
+            label = ", ".join(files[:3])
+            if len(files) > 3:
+                label += ", ..."
+            return f"Editing files: {label}{suffix}"
+        return f"Editing files{suffix}"
+    if name:
+        return f"{name}{suffix}"
+    return f"tool{suffix}"
+
+
+def _patch_targets(text):
+    """Return patch target files from an apply_patch input."""
+    files = []
+    for line in str(text or "").splitlines():
+        for prefix in ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "):
+            if not line.startswith(prefix):
+                continue
+            target = line[len(prefix) :].strip()
+            if target and target not in files:
+                files.append(target)
+    return files
+
+
+def _updated_files(text):
+    """Return file paths mentioned in apply_patch output."""
+    files = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line or line == "Success. Updated the following files:":
+            continue
+        if line.startswith(("M ", "A ", "D ")):
+            target = line[2:].strip()
+            if target and target not in files:
+                files.append(target)
+    return files
 
 
 def _cron_tag(home, hostname):

@@ -33,6 +33,7 @@ from codexapi.agents import (
     set_agent_heartbeat,
     show_agent,
     start_agent,
+    status_agent,
     tick,
     uninstall_cron,
     write_tick_wrapper,
@@ -50,6 +51,26 @@ def _temp_home():
     with tempfile.TemporaryDirectory() as tmpdir:
         with patch.dict(os.environ, {"CODEXAPI_HOME": tmpdir, "USER": "tester"}, clear=False):
             yield Path(tmpdir)
+
+
+def _write_rollout(path, events):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _set_rollout_session(home, agent_id, hostname, thread_id, rollout_path):
+    session_path = home / "agents" / agent_id / "hosts" / hostname / "session.json"
+    state_path = home / "agents" / agent_id / "state.json"
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    session["thread_id"] = thread_id
+    session["rollout_path"] = str(rollout_path)
+    state["thread_id"] = thread_id
+    session_path.write_text(json.dumps(session, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 class AgentsTests(unittest.TestCase):
@@ -338,6 +359,119 @@ class AgentsTests(unittest.TestCase):
             shown = show_agent(agent["id"])
             self.assertEqual(shown["state"]["status"], "ready")
             self.assertEqual(shown["state"]["thread_id"], "thread-xyz")
+
+    def test_resume_done_agent_reopens_it(self):
+        def finish_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Finished",
+                        "continue": False,
+                        "reply": "done",
+                    }
+                ),
+                "thread_id": "thread-done",
+            }
+
+        def resume_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Back on it",
+                        "continue": True,
+                        "reply": "Reopened.",
+                    }
+                ),
+                "thread_id": "thread-done",
+            }
+
+        with _temp_home():
+            agent = start_agent("Keep an eye on this.", hostname="host-a")
+            tick(hostname="host-a", runner=finish_runner)
+            self.assertEqual(show_agent(agent["id"])["state"]["status"], "done")
+
+            control_agent(agent["id"], "resume", hostname="host-b")
+            resumed = tick(hostname="host-a", runner=resume_runner)
+            self.assertEqual(resumed["woken"], 1)
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["status"], "ready")
+            self.assertEqual(shown["state"]["reply"], "Reopened.")
+
+    def test_send_wakes_done_agent_once_without_reopening(self):
+        prompts = []
+
+        def finish_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Finished",
+                        "continue": False,
+                        "reply": "done",
+                    }
+                ),
+                "thread_id": "thread-done",
+            }
+
+        def reply_runner(meta, session, prompt):
+            prompts.append(prompt)
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Answered",
+                        "continue": True,
+                        "reply": "I saw your note.",
+                    }
+                ),
+                "thread_id": "thread-done",
+            }
+
+        with _temp_home():
+            agent = start_agent("Handle background work.", hostname="host-a")
+            tick(hostname="host-a", runner=finish_runner)
+            send_agent(agent["id"], "status", author="mark", hostname="host-b")
+
+            result = tick(hostname="host-a", runner=reply_runner)
+            self.assertEqual(result["woken"], 1)
+            self.assertIn("mark: status", prompts[0])
+
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["status"], "done")
+            self.assertEqual(shown["state"]["reply"], "I saw your note.")
+            self.assertEqual(shown["state"]["next_wake_at"], "")
+            self.assertEqual(shown["state"]["unread_message_count"], 0)
+
+    def test_send_wakes_canceled_agent_once_without_reopening(self):
+        prompts = []
+
+        def reply_runner(meta, session, prompt):
+            prompts.append(prompt)
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Answered",
+                        "continue": True,
+                        "reply": "I saw your note.",
+                    }
+                ),
+                "thread_id": "thread-canceled",
+            }
+
+        with _temp_home():
+            agent = start_agent("Handle background work.", hostname="host-a")
+            control_agent(agent["id"], "cancel", hostname="host-b")
+            tick(hostname="host-a", runner=reply_runner)
+            self.assertEqual(show_agent(agent["id"])["state"]["status"], "canceled")
+
+            send_agent(agent["id"], "status", author="mark", hostname="host-b")
+            result = tick(hostname="host-a", runner=reply_runner)
+            self.assertEqual(result["woken"], 1)
+            self.assertIn("mark: status", prompts[-1])
+
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["status"], "canceled")
+            self.assertEqual(shown["state"]["reply"], "I saw your note.")
+            self.assertEqual(shown["state"]["next_wake_at"], "")
+            self.assertEqual(shown["state"]["unread_message_count"], 0)
 
     def test_set_agent_heartbeat_updates_meta_and_reschedules_idle_agent(self):
         start = datetime(2026, 3, 6, 8, 0, tzinfo=timezone.utc)
@@ -974,6 +1108,369 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(payload["heartbeat_minutes"], 12)
             shown = show_agent(agent["id"])
             self.assertEqual(shown["meta"]["heartbeat_minutes"], 12)
+
+    def test_status_agent_returns_latest_completed_turn(self):
+        with _temp_home() as home:
+            agent = start_agent("Handle messages.", hostname="host-a")
+            rollout = home / "rollouts" / "rollout-thread-status.jsonl"
+            _write_rollout(
+                rollout,
+                [
+                    {
+                        "timestamp": "2026-03-09T13:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-old"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Old turn.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:00:02Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "turn-old",
+                            "last_agent_message": "{\"status\":\"Old\",\"continue\":false}",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-new"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Checking the repository state.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "git status --short"}),
+                            "call_id": "call-cmd",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:03Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-cmd",
+                            "output": "Chunk ID: 123456\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nM README.md\n",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:04Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Updating the agent notes now.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:05Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "custom_tool_call",
+                            "name": "apply_patch",
+                            "status": "completed",
+                            "call_id": "call-patch",
+                            "input": "*** Begin Patch\n*** Update File: /tmp/AGENTBOOK.md\n@@\n-old\n+new\n*** End Patch\n",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:06Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "custom_tool_call_output",
+                            "call_id": "call-patch",
+                            "output": json.dumps(
+                                {
+                                    "output": "Success. Updated the following files:\nM /tmp/AGENTBOOK.md\n",
+                                    "metadata": {"exit_code": 0, "duration_seconds": 0.1},
+                                }
+                            ),
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:07Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "final_answer",
+                            "message": "{\"status\":\"Ready to merge\",\"continue\":false,\"reply\":\"Looks good.\"}",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T13:10:08Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "turn-new",
+                            "last_agent_message": "{\"status\":\"Ready to merge\",\"continue\":false,\"reply\":\"Looks good.\"}",
+                        },
+                    },
+                ],
+            )
+            _set_rollout_session(home, agent["id"], "host-a", "thread-status", rollout)
+
+            result = status_agent(agent["id"], include_actions=True)
+            self.assertEqual(result["turn_id"], "turn-new")
+            self.assertEqual(result["turn_state"], "complete")
+            self.assertEqual(result["started_at"], "2026-03-09T13:10:00Z")
+            self.assertEqual(result["ended_at"], "2026-03-09T13:10:08Z")
+            self.assertEqual(
+                result["progress"],
+                [
+                    "Checking the repository state.",
+                    "Updating the agent notes now.",
+                ],
+            )
+            self.assertEqual(result["final_json"]["status"], "Ready to merge")
+            self.assertEqual(result["final_json"]["reply"], "Looks good.")
+            self.assertEqual(len(result["tools"]), 2)
+            self.assertEqual(result["tools"][0]["name"], "exec_command")
+            self.assertEqual(result["tools"][0]["command"], "git status --short")
+            self.assertEqual(result["tools"][0]["exit_code"], 0)
+            self.assertEqual(result["tools"][0]["output"], "M README.md")
+            self.assertEqual(result["tools"][1]["name"], "apply_patch")
+            self.assertEqual(result["tools"][1]["files"], ["/tmp/AGENTBOOK.md"])
+
+    def test_status_agent_returns_missing_when_no_rollout_is_known(self):
+        with _temp_home():
+            agent = start_agent("Handle messages.", hostname="host-a")
+            result = status_agent(agent["id"])
+            self.assertEqual(result["turn_state"], "missing")
+            self.assertEqual(result["rollout_path"], "")
+            self.assertEqual(result["progress"], [])
+
+    def test_status_agent_returns_active_turn_when_run_lock_is_held(self):
+        with _temp_home() as home:
+            agent = start_agent("Handle messages.", hostname="host-a")
+            rollout = home / "rollouts" / "rollout-thread-active.jsonl"
+            _write_rollout(
+                rollout,
+                [
+                    {
+                        "timestamp": "2026-03-09T14:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-active"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T14:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Checking the latest CI run now.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T14:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "gh pr checks 123"}),
+                            "call_id": "call-live",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T14:00:03Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-live",
+                            "output": "Chunk ID: 654321\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nci / in_progress\n",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T14:00:04Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "The required checks are still running.",
+                        },
+                    },
+                ],
+            )
+            _set_rollout_session(home, agent["id"], "host-a", "thread-active", rollout)
+
+            lock_path = home / "agents" / agent["id"] / "hosts" / "host-a" / "run.lock"
+            with _try_lock(lock_path) as handle:
+                self.assertIsNotNone(handle)
+                result = status_agent(agent["id"])
+
+            self.assertEqual(result["turn_id"], "turn-active")
+            self.assertEqual(result["turn_state"], "active")
+            self.assertEqual(result["ended_at"], "")
+            self.assertEqual(result["final_output"], "The required checks are still running.")
+            self.assertIsNone(result["final_json"])
+            self.assertEqual(
+                result["progress"],
+                [
+                    "Checking the latest CI run now.",
+                    "The required checks are still running.",
+                ],
+            )
+
+    def test_cli_status_shows_latest_turn_details(self):
+        with _temp_home() as home:
+            agent = start_agent("Handle messages.", hostname="host-a")
+            rollout = home / "rollouts" / "rollout-thread-cli.jsonl"
+            _write_rollout(
+                rollout,
+                [
+                    {
+                        "timestamp": "2026-03-09T15:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-cli"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T15:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Inspecting the latest rollout details.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T15:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "git status --short"}),
+                            "call_id": "call-cli",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T15:00:03Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-cli",
+                            "output": "Chunk ID: 111111\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nM README.md\n",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T15:00:04Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "final_answer",
+                            "message": "{\"status\":\"Handled\",\"continue\":false}",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T15:00:05Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "turn-cli",
+                            "last_agent_message": "{\"status\":\"Handled\",\"continue\":false}",
+                        },
+                    },
+                ],
+            )
+            _set_rollout_session(home, agent["id"], "host-a", "thread-cli", rollout)
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli_main(["agent", "status", agent["id"]])
+            text = output.getvalue()
+            self.assertIn("Turn: turn-cli [complete]", text)
+            self.assertIn("Progress:", text)
+            self.assertIn("Inspecting the latest rollout details.", text)
+            self.assertIn("Final fields:", text)
+            self.assertIn("Status: Handled", text)
+            self.assertNotIn("Final output:", text)
+            self.assertNotIn("Actions:", text)
+
+    def test_cli_status_with_actions_shows_tool_summaries(self):
+        with _temp_home() as home:
+            agent = start_agent("Handle messages.", hostname="host-a")
+            rollout = home / "rollouts" / "rollout-thread-cli-actions.jsonl"
+            _write_rollout(
+                rollout,
+                [
+                    {
+                        "timestamp": "2026-03-09T16:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-cli-actions"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T16:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Inspecting the latest rollout details.",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T16:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "git status --short"}),
+                            "call_id": "call-cli-actions",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T16:00:03Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-cli-actions",
+                            "output": "Chunk ID: 222222\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nM README.md\n",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T16:00:04Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "final_answer",
+                            "message": "{\"status\":\"Handled\",\"continue\":false}",
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-09T16:00:05Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "turn-cli-actions",
+                            "last_agent_message": "{\"status\":\"Handled\",\"continue\":false}",
+                        },
+                    },
+                ],
+            )
+            _set_rollout_session(home, agent["id"], "host-a", "thread-cli-actions", rollout)
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli_main(["agent", "status", "--actions", agent["id"]])
+            text = output.getvalue()
+            self.assertIn("Actions:", text)
+            self.assertIn("Running command: git status --short (exit 0)", text)
 
 
 if __name__ == "__main__":

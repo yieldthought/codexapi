@@ -29,6 +29,7 @@ from .agents import (
     send_agent,
     set_agent_heartbeat,
     show_agent as show_managed_agent,
+    status_agent as status_managed_agent,
     start_agent as start_managed_agent,
     tick as tick_managed_agents,
     uninstall_cron as uninstall_agent_cron,
@@ -188,6 +189,48 @@ def _print_managed_agent_read(result):
             print(f"[{stamp}] {kind}:")
         print(item.get("text") or "")
         print()
+
+
+def _print_managed_agent_status(result, include_actions=False):
+    print(f"{result['name']} [{result['agent_status'] or '-'}]")
+    print(f"ID: {result['id']}")
+    print(f"Thread: {result.get('thread_id') or '-'}")
+    print(f"Turn: {result.get('turn_id') or '-'} [{result.get('turn_state') or '-'}]")
+    print(f"Started: {result.get('started_at') or '-'}")
+    print(f"Ended: {result.get('ended_at') or '-'}")
+    print(f"CWD: {result.get('cwd') or '-'}")
+    print(f"Rollout: {result.get('rollout_path') or '-'}")
+    progress = result.get("progress") or []
+    print("Progress:")
+    if not progress:
+        print("- none")
+    else:
+        for item in progress:
+            print(f"- {_single_line(item)}")
+    if include_actions:
+        tools = result.get("tools") or []
+        print("Actions:")
+        if not tools:
+            print("- none")
+        else:
+            for tool in tools:
+                print(f"- {tool.get('summary') or tool.get('name') or 'tool'}")
+                if tool.get("output"):
+                    print(f"  Output: {_single_line(tool['output'])}")
+    final_json = result.get("final_json")
+    if final_json is not None:
+        print("Final fields:")
+        print(f"Status: {final_json.get('status') or '-'}")
+        print(f"Continue: {str(bool(final_json.get('continue'))).lower()}")
+        print(f"Reply: {final_json.get('reply') or '-'}")
+        print(f"Notify: {final_json.get('notify') or '-'}")
+        return
+    final_output = result.get("final_output") or ""
+    print("Final output:")
+    if final_output:
+        print(final_output)
+    else:
+        print("-")
 
 
 def _print_managed_agent_identity():
@@ -1502,6 +1545,19 @@ def main(argv=None):
     )
     agent_show.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
 
+    agent_status = agent_subparsers.add_parser(
+        "status",
+        help="Show the latest rollout turn for one durable agent.",
+    )
+    agent_status.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+    agent_status.add_argument(
+        "--actions",
+        "--with-actions",
+        action="store_true",
+        dest="actions",
+        help="Include verbose tool actions from the latest turn.",
+    )
+
     agent_read = agent_subparsers.add_parser(
         "read",
         help="Read recent visible communication for one agent.",
@@ -1914,6 +1970,12 @@ def main(argv=None):
             return
         if args.agent_command == "show":
             _print_managed_agent_show(show_managed_agent(args.agent_ref))
+            return
+        if args.agent_command == "status":
+            _print_managed_agent_status(
+                status_managed_agent(args.agent_ref, include_actions=args.actions),
+                include_actions=args.actions,
+            )
             return
         if args.agent_command == "read":
             if args.limit < 1:
