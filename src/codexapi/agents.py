@@ -33,8 +33,9 @@ _AGENT_PROMPT = (
     "on an ongoing job. Be independent and practical. Manage work and follow "
     "through. Use codexapi task or codexapi science when you want a separate "
     "coding worker. If you need the user's attention, put a short message in the "
-    "reply field. If something is urgent and should send Pushover, put it in the "
-    "notify field. Respond with JSON only."
+    "reply field. Put a short first-person turn summary in the update field. If "
+    "something is urgent and should send Pushover, put it in the notify field. "
+    "Respond with JSON only."
 )
 _AGENT_JSON = (
     "Respond with JSON only (no markdown/backticks/extra text).\n"
@@ -42,6 +43,7 @@ _AGENT_JSON = (
     "  status: string (one line)\n"
     "  continue: boolean\n"
     "  reply: string (optional)\n"
+    "  update: string (recommended; short first-person summary of this turn)\n"
     "  notify: string (optional)\n"
 )
 _COMMAND_KINDS = {"send", "wake", "pause", "resume", "cancel"}
@@ -110,6 +112,7 @@ def start_agent(
     home=None,
     hostname=None,
     now=None,
+    discord=True,
 ):
     """Create a durable agent and return its current snapshot."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -181,12 +184,21 @@ def start_agent(
         "last_error": "",
         "activity": "Created",
         "reply": "",
+        "update": "",
     }
 
     _write_json(agent_dir / "meta.json", meta)
     _write_json(agent_dir / "state.json", state)
     _write_json(host_dir / "session.json", session)
     _write_text(agent_dir / "AGENTBOOK.md", _AGENTBOOK_TEMPLATE)
+    if discord:
+        try:
+            from .discord import ensure_discord_bridge
+
+            ensure_discord_bridge(meta, home)
+        except Exception:
+            shutil.rmtree(agent_dir)
+            raise
     return _snapshot(agent_dir)
 
 
@@ -425,6 +437,12 @@ def delete_agent(agent_ref, force=False, home=None):
             "Refusing to delete an agent that still has child agents. Use --force if you really want to remove it."
         )
     shutil.rmtree(agent_dir)
+    try:
+        from .discord import remove_discord_bridge
+
+        remove_discord_bridge(snapshot["id"], home)
+    except Exception:
+        pass
     return {
         "deleted": True,
         "id": snapshot["id"],
@@ -435,19 +453,48 @@ def delete_agent(agent_ref, force=False, home=None):
     }
 
 
-def nudge_agent(agent_ref, home=None, hostname=None, now=None, runner=None):
-    """Attempt an immediate wake for one locally-owned agent."""
+def run_agent(agent_ref, home=None, hostname=None, now=None, runner=None):
+    """Run one agent synchronously when it is locally owned."""
+    home = _resolve_home(home)
     agent_dir = resolve_agent_dir(agent_ref, home)
     meta = _read_json(agent_dir / "meta.json")
     host = hostname or current_hostname()
     if meta["hostname"] != host:
         return {"ran": False, "reason": "remote", "processed": 0, "woken": 0}
     outcome = _tick_agent(agent_dir, now or utc_now(), runner)
-    return {
+    result = {
         "ran": True,
         "reason": "local",
         "processed": 1 if outcome["processed"] else 0,
         "woken": 1 if outcome["woken"] else 0,
+    }
+    if runner is None and result["processed"]:
+        try:
+            from .discord import deliver_discord_updates
+
+            deliver_discord_updates(home, host, meta["id"])
+        except Exception:
+            pass
+    return result
+
+
+def nudge_agent(agent_ref, home=None, hostname=None, now=None, runner=None, wait=True):
+    """Attempt an immediate wake for one locally-owned agent."""
+    home = _resolve_home(home)
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    meta = _read_json(agent_dir / "meta.json")
+    host = hostname or current_hostname()
+    if meta["hostname"] != host:
+        return {"ran": False, "reason": "remote", "processed": 0, "woken": 0}
+    if runner is not None or wait:
+        return run_agent(agent_ref, home, host, now, runner)
+    _spawn_agent_process(meta["id"], home, host)
+    return {
+        "ran": True,
+        "reason": "local",
+        "processed": 1,
+        "woken": 1,
+        "spawned": True,
     }
 
 
@@ -467,11 +514,19 @@ def tick(home=None, hostname=None, now=None, runner=None):
         for agent in list_agents(home):
             if agent["hostname"] != host:
                 continue
-            outcome = _tick_agent(_agent_dir(home, agent["id"]), now, runner)
-            if outcome["processed"]:
-                processed += 1
-            if outcome["woken"]:
-                woken += 1
+            agent_dir = _agent_dir(home, agent["id"])
+            if runner is not None:
+                outcome = _tick_agent(agent_dir, now, runner)
+                if outcome["processed"]:
+                    processed += 1
+                if outcome["woken"]:
+                    woken += 1
+                continue
+            if not _agent_needs_tick(agent_dir, now):
+                continue
+            _spawn_agent_process(agent["id"], home, host)
+            processed += 1
+            woken += 1
         return {"ran": True, "hostname": host, "processed": processed, "woken": woken}
 
 
@@ -568,7 +623,7 @@ def write_tick_wrapper(home=None, python_executable=None, path_value=None, hostn
         f"export CODEXAPI_HOME={shlex.quote(str(home))}",
         f"export CODEXAPI_HOSTNAME={shlex.quote(str(hostname))}",
         f"export PATH={shlex.quote(path_value)}",
-        f"exec {shlex.quote(str(python_executable))} -m codexapi agent tick",
+        f"exec {shlex.quote(str(python_executable))} -m codexapi tick",
     ]
     _write_text(wrapper, "\n".join(lines) + "\n")
     wrapper.chmod(0o755)
@@ -609,6 +664,7 @@ def _tick_agent(agent_dir, now, runner):
             _sync_state_from_session(state, session)
             _write_json(session_path, session)
             _write_json(agent_dir / "state.json", state)
+            _sync_discord_channel_name(meta["id"], agent_dir.parents[1], meta["hostname"])
         terminal_status = _one_shot_terminal_status(state)
         if state.get("status") not in ("ready", "error") and not terminal_status:
             return {"processed": bool(commands), "woken": False}
@@ -616,6 +672,44 @@ def _tick_agent(agent_dir, now, runner):
             return {"processed": bool(commands), "woken": False}
         _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal_status)
         return {"processed": True, "woken": True}
+
+
+def _agent_needs_tick(agent_dir, now):
+    meta = _read_json(agent_dir / "meta.json")
+    state = _read_json(agent_dir / "state.json")
+    run_lock_path = agent_dir / "hosts" / meta["hostname"] / "run.lock"
+    if _run_lock_held(run_lock_path):
+        return False
+    if _has_new_commands(agent_dir):
+        return True
+    terminal_status = _one_shot_terminal_status(state)
+    if state.get("status") not in ("ready", "error") and not terminal_status:
+        return False
+    return _is_due(state, now)
+
+
+def _spawn_agent_process(agent_id, home, hostname):
+    env = dict(os.environ)
+    env["CODEXAPI_HOME"] = str(home)
+    env["CODEXAPI_HOSTNAME"] = str(hostname)
+    subprocess.Popen(
+        [sys.executable, "-m", "codexapi", "agent", "run", agent_id],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def _sync_discord_channel_name(agent_id, home, hostname):
+    try:
+        from .discord import sync_discord_channel_name
+
+        sync_discord_channel_name(agent_id, home, hostname)
+    except Exception:
+        pass
 
 
 def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal_status=""):
@@ -626,6 +720,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal
     state["activity"] = "Running"
     _sync_state_from_session(state, session)
     _write_json(agent_dir / "state.json", state)
+    _sync_discord_channel_name(meta["id"], agent_dir.parents[1], meta["hostname"])
 
     run = {
         "id": _run_id(now),
@@ -636,6 +731,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal
         "messages": [],
         "status": "",
         "reply": "",
+        "update": "",
         "notify": "",
         "error": "",
         "continue": True,
@@ -661,6 +757,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal
         usage = _normalize_usage(outcome.get("usage"))
         _add_usage(meta, state, usage, ended)
         state["reply"] = response["reply"]
+        state["update"] = response["update"]
         state["last_success_at"] = format_utc(ended)
         state["last_error"] = ""
         state["thread_id"] = session["thread_id"]
@@ -680,9 +777,11 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal
         _sync_state_from_session(state, session)
         _write_json(agent_dir / "hosts" / meta["hostname"] / "session.json", session)
         _write_json(agent_dir / "state.json", state)
+        _sync_discord_channel_name(meta["id"], agent_dir.parents[1], meta["hostname"])
         run["ended_at"] = format_utc(ended)
         run["status"] = response["status"]
         run["reply"] = response["reply"]
+        run["update"] = response["update"]
         run["notify"] = response["notify"]
         run["continue"] = bool(response["continue"])
         run["usage"] = usage
@@ -706,6 +805,7 @@ def _wake_agent(agent_dir, meta, state, session, now, commands, runner, terminal
         _sync_state_from_session(state, session)
         _write_json(agent_dir / "hosts" / meta["hostname"] / "session.json", session)
         _write_json(agent_dir / "state.json", state)
+        _sync_discord_channel_name(meta["id"], agent_dir.parents[1], meta["hostname"])
         run["ended_at"] = format_utc(ended)
         run["error"] = state["last_error"]
         _write_run(agent_dir, meta["hostname"], run)
@@ -757,6 +857,7 @@ def _parse_agent_response(output):
     status = payload.get("status")
     cont = payload.get("continue")
     reply = payload.get("reply")
+    update = payload.get("update")
     notify = payload.get("notify")
     if not isinstance(status, str) or not status.strip():
         raise ValueError("Agent response missing string 'status'.")
@@ -764,16 +865,21 @@ def _parse_agent_response(output):
         raise ValueError("Agent response missing boolean 'continue'.")
     if reply is None:
         reply = ""
+    if update is None:
+        update = reply or status or ""
     if notify is None:
         notify = ""
     if not isinstance(reply, str):
         raise ValueError("Agent response missing string 'reply'.")
+    if not isinstance(update, str):
+        raise ValueError("Agent response missing string 'update'.")
     if not isinstance(notify, str):
         raise ValueError("Agent response missing string 'notify'.")
     return {
         "status": _single_line(status),
         "continue": cont,
         "reply": reply.strip(),
+        "update": update.strip(),
         "notify": notify.strip(),
     }
 
@@ -986,6 +1092,7 @@ def _snapshot(agent_dir, child_map=None):
         "last_error": state.get("last_error") or "",
         "activity": state.get("activity") or "",
         "reply": state.get("reply") or "",
+        "update": state.get("update") or "",
     }
 
 
@@ -1321,6 +1428,16 @@ def _queued_send_commands(agent_dir):
         if payload.get("kind") == "send":
             queued.append(payload)
     return queued
+
+
+def _has_new_commands(agent_dir):
+    new_dir = agent_dir / "commands" / "new"
+    if not new_dir.exists():
+        return False
+    for path in new_dir.iterdir():
+        if path.is_file() and path.suffix == ".json":
+            return True
+    return False
 
 
 def _child_map(home):

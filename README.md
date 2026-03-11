@@ -158,6 +158,9 @@ codexapi agent whoami
 codexapi agent install-cron
 ```
 
+`codexapi agent install-cron` installs one background scheduler hook for this
+`CODEXAPI_HOME`. The wrapper now runs `codexapi tick`, which handles Discord
+ingress/egress when enabled and the durable agent wake scan.
 If you skip `install-cron`, `codexapi agent start` warns on stderr because
 background wakes will not run until the scheduler hook is installed.
 When `gh` is installed and authenticated, `agent start` also captures a
@@ -173,6 +176,8 @@ codexapi agent start --name ci-fixer \
 
 Add `--wait` if you want `start` to block for the first local wake instead of
 just scheduling it.
+Add `--no-discord` to skip Discord channel creation for one agent when the global
+Discord bridge is enabled.
 
 Start a persistent watcher that keeps running until you stop it:
 
@@ -235,6 +240,151 @@ active turn so far.
 
 See [docs/agent-v1.md](docs/agent-v1.md) for the filesystem model and scheduling
 details.
+
+### Discord bridge
+
+Discord bridging is global per `CODEXAPI_HOME`. `codexapi discord setup`
+backfills all existing agents in that home, and after setup every new durable
+agent creates a Discord channel by default unless you pass `--no-discord`.
+The expected Discord shape is one private server (guild) per human user and one
+text channel per agent.
+
+#### One-time setup
+
+1. Create a private Discord server for yourself.
+
+Use a normal private friend server. You do not need to enable Community.
+Official guides:
+- [How do I create a server?](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server)
+- [How do I set up a private server?](https://support.discord.com/hc/en-us/articles/206143407-How-do-I-set-up-a-private-server)
+
+2. Create a Discord application and bot.
+
+Go to the [Discord Developer Portal](https://discord.com/developers/applications),
+click `New Application`, then open the `Bot` page for that app.
+
+Discord's getting-started guide covers the app and bot flow here:
+- [Build your first Discord app](https://discord.com/developers/docs/getting-started)
+
+3. Copy the bot token.
+
+On the app's `Bot` page, copy or reset the token and store it somewhere safe.
+Treat this like a password. Do not commit it to git.
+
+4. Configure installation for a server-installed bot.
+
+Open the app's `Installation` page in the Developer Portal.
+
+Recommended settings for this integration:
+- Installation context: `Guild Install`
+- Install link type: `Discord Provided Link`
+- Guild install scopes: `bot`
+- Bot permissions: `View Channels`, `Send Messages`, `Read Message History`, `Manage Channels`
+
+Official docs:
+- [Installation context and install links](https://docs.discord.com/developers/resources/application)
+- [Permissions](https://docs.discord.com/developers/topics/permissions)
+
+`applications.commands` is optional for this integration today because `codexapi`
+uses plain `!` commands rather than slash commands.
+
+5. Invite the bot to your private server.
+
+Still on the `Installation` page, copy the generated install link and open it in
+your browser. Add the app to the private server you created in step 1.
+
+6. Enable Message Content for the bot.
+
+Open the app's `Bot` page and enable the `Message Content` privileged intent.
+This integration reads ordinary chat messages, so enabling it is the safe
+default. Official docs:
+- [What are Privileged Intents?](https://support-dev.discord.com/hc/en-us/articles/6207308062871-What-are-Privileged-Intents)
+- [Message Content Privileged Intent FAQ](https://support-dev.discord.com/hc/en-us/articles/4404772028055-Message-Content-Privi)
+
+7. Enable Developer Mode in Discord so you can copy IDs.
+
+You need three IDs:
+- your `User ID`
+- the server's `Guild ID`
+- optionally a `Category ID` if you want all agent channels under one category
+
+Official guide:
+- [Where can I find my User/Server/Message ID?](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
+
+8. Optionally create a category for agent channels.
+
+If you want all agent channels grouped together, create a category in your
+private server and copy its channel ID with Developer Mode enabled.
+
+9. Run `codexapi discord setup`.
+
+```bash
+codexapi discord setup \
+  --bot-token $DISCORD_BOT_TOKEN \
+  --guild-id 123456789012345678 \
+  --user-id 234567890123456789
+```
+
+If you created a category for agent channels:
+
+```bash
+codexapi discord setup \
+  --bot-token $DISCORD_BOT_TOKEN \
+  --guild-id 123456789012345678 \
+  --user-id 234567890123456789 \
+  --category-id 345678901234567890
+```
+
+That writes the Discord bridge config, backfills existing agents, and ensures
+the shared scheduler hook is installed for the current host.
+
+10. Start an agent and confirm a channel appears.
+
+```bash
+codexapi agent start --name discord-smoke \
+  "Reply briefly and confirm the Discord bridge is working."
+```
+
+You should see a new channel appear in the configured server, initially named
+something like `💤-discord-smoke`.
+
+Useful commands:
+
+```bash
+codexapi discord status
+codexapi discord tick
+codexapi discord uninstall
+codexapi tick
+```
+
+Discord chat commands currently supported in bridged channels:
+
+```text
+!wake
+!set-heartbeat <minutes>
+!pause
+!resume
+!cancel
+!delete confirm
+!status
+!book
+!help
+```
+
+Plain chat messages are buffered and delivered to the agent as one multiline
+turn on the next wake, so quick follow-up corrections stay together.
+
+#### Common gotchas
+
+- If `discord setup` succeeds but the bot never sees your messages, check that
+  `Message Content` is enabled on the app's `Bot` page.
+- If channels are not being created, check that the bot was installed to the
+  correct server and has `Manage Channels`.
+- If messages are not posting back, check that the bot has `View Channels`,
+  `Send Messages`, and `Read Message History`.
+- If `--category-id` is wrong, `discord setup` will fail because the ID must
+  refer to a category channel.
+- This integration expects a server-installed bot, not a user-installed app.
 
 Ralph loop mode repeats the same prompt until a completion promise or a max
 iteration cap is hit (0 means unlimited). Cancel by deleting

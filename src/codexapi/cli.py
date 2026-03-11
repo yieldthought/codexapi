@@ -26,6 +26,7 @@ from .agents import (
     nudge_agent,
     read_agent as read_managed_agent,
     read_agentbook,
+    run_agent as run_managed_agent,
     send_agent,
     set_agent_heartbeat,
     show_agent as show_managed_agent,
@@ -41,6 +42,15 @@ from .task import DEFAULT_MAX_ITERATIONS, TaskFailed, task
 from .taskfile import TaskFile, load_task_file, task_def_uses_item
 from .rate_limits import quota_line
 from .lead import lead
+from .discord import (
+    deliver_discord_updates,
+    flush_discord_turns,
+    ingest_discord,
+    setup_discord,
+    sync_discord_bridges,
+    discord_status,
+    uninstall_discord,
+)
 
 _SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -223,6 +233,7 @@ def _print_managed_agent_status(result, include_actions=False):
         print(f"Status: {final_json.get('status') or '-'}")
         print(f"Continue: {str(bool(final_json.get('continue'))).lower()}")
         print(f"Reply: {final_json.get('reply') or '-'}")
+        print(f"Update: {final_json.get('update') or '-'}")
         print(f"Notify: {final_json.get('notify') or '-'}")
         return
     final_output = result.get("final_output") or ""
@@ -273,6 +284,21 @@ def _warn_agent_scheduler_missing():
     print(f"Install it with: {_agent_install_cron_command()}", file=sys.stderr)
 
 
+def _system_tick():
+    discord_bridges = sync_discord_bridges()
+    discord_ingress = ingest_discord()
+    discord_flush = flush_discord_turns()
+    agents = tick_managed_agents()
+    discord_egress = deliver_discord_updates()
+    return {
+        "discord_bridges": discord_bridges,
+        "discord_ingress": discord_ingress,
+        "discord_flush": discord_flush,
+        "agents": agents,
+        "discord_egress": discord_egress,
+    }
+
+
 def _send_reply_info(agent_ref, message_id):
     """Return the matching run reply for one sent message, if already delivered."""
     shown = show_managed_agent(agent_ref)
@@ -286,9 +312,12 @@ def _send_reply_info(agent_ref, message_id):
                 "run_id": run.get("id") or "",
             }
             reply = run.get("reply") or ""
+            update = run.get("update") or ""
             error = run.get("error") or ""
             if reply:
                 info["agent_reply"] = reply
+            if update:
+                info["agent_update"] = update
             if error:
                 info["agent_error"] = error
             return info
@@ -319,6 +348,7 @@ def _print_managed_agent_show(result):
     )
     print(f"Activity: {_state_text(state.get('activity'))}")
     print(f"Reply: {_state_text(state.get('reply'))}")
+    print(f"Update: {_state_text(state.get('update'))}")
     print(f"Last error: {_state_text(state.get('last_error'))}")
     print(f"Last wake: {_state_time(state.get('last_wake_at'))}")
     print(f"Last success: {_state_time(state.get('last_success_at'))}")
@@ -448,11 +478,14 @@ def _format_managed_agent_run(run):
     tokens = _format_token_total(usage.get("total_tokens"))
     status = run.get("error") or run.get("status") or "-"
     reply = run.get("reply") or ""
+    update = run.get("update") or ""
     message_count = len(run.get("messages") or [])
     parts = [started, reason, tokens]
     if message_count:
         parts.append(f"msgs={message_count}")
     summary = _truncate_head(_single_line(status), 60)
+    if update:
+        summary = _truncate_head(f"{summary} | {_single_line(update)}", 100)
     if reply:
         summary = _truncate_head(f"{summary} | {_single_line(reply)}", 100)
     parts.append(summary)
@@ -1529,6 +1562,13 @@ def main(argv=None):
         action="store_true",
         help="Wait for the first local wake to finish instead of just scheduling it.",
     )
+    agent_start.add_argument(
+        "--no-discord",
+        action="store_false",
+        dest="discord",
+        default=True,
+        help="Do not create a Discord bridge for this agent.",
+    )
 
     agent_subparsers.add_parser(
         "list",
@@ -1538,6 +1578,12 @@ def main(argv=None):
         "whoami",
         help="Show the effective host and CODEXAPI_HOME for agents.",
     )
+
+    agent_run = agent_subparsers.add_parser(
+        "run",
+        help=argparse.SUPPRESS,
+    )
+    agent_run.add_argument("agent_ref", help=argparse.SUPPRESS)
 
     agent_show = agent_subparsers.add_parser(
         "show",
@@ -1641,6 +1687,47 @@ def main(argv=None):
     agent_subparsers.add_parser(
         "uninstall-cron",
         help="Remove the cron entry for this CODEXAPI_HOME.",
+    )
+
+    discord_parser = subparsers.add_parser(
+        "discord",
+        help="Configure Discord bridging for durable agents.",
+    )
+    discord_subparsers = discord_parser.add_subparsers(dest="discord_command")
+
+    discord_setup = discord_subparsers.add_parser(
+        "setup",
+        help="Configure Discord bridging and ensure the scheduler is installed.",
+    )
+    discord_setup.add_argument("--bot-token", required=True, help="Discord bot token.")
+    discord_setup.add_argument("--guild-id", required=True, help="Private Discord server (guild) id.")
+    discord_setup.add_argument("--user-id", required=True, help="Human Discord user id.")
+    discord_setup.add_argument("--category-id", help="Optional category id to hold agent channels.")
+    discord_setup.add_argument("--owner-host", help="Hostname that will poll and send Discord messages.")
+
+    discord_subparsers.add_parser(
+        "status",
+        help="Show current Discord bridge status.",
+    )
+
+    discord_uninstall = discord_subparsers.add_parser(
+        "uninstall",
+        help="Disable Discord bridging.",
+    )
+    discord_uninstall.add_argument(
+        "--delete-channels",
+        action="store_true",
+        help="Delete all bridged Discord channels before uninstalling.",
+    )
+
+    discord_subparsers.add_parser(
+        "tick",
+        help="Run only the Discord ingress/egress steps once.",
+    )
+
+    subparsers.add_parser(
+        "tick",
+        help="Run one full background tick: Discord ingress, agent tick, Discord egress.",
     )
 
     task_parser = subparsers.add_parser(
@@ -1955,10 +2042,11 @@ def main(argv=None):
                 args.backend,
                 args.yolo,
                 args.flags,
+                discord=args.discord,
             )
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(result["id"])
+                result["nudge"] = nudge_agent(result["id"], wait=True)
             _warn_agent_scheduler_missing()
             print(json.dumps(result, indent=2, sort_keys=True))
             return
@@ -1967,6 +2055,9 @@ def main(argv=None):
             return
         if args.agent_command == "whoami":
             _print_managed_agent_identity()
+            return
+        if args.agent_command == "run":
+            print(json.dumps(run_managed_agent(args.agent_ref), indent=2, sort_keys=True))
             return
         if args.agent_command == "show":
             _print_managed_agent_show(show_managed_agent(args.agent_ref))
@@ -1989,7 +2080,7 @@ def main(argv=None):
             result = send_agent(args.agent_ref, args.message, args.author)
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref)
+                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
                 reply_info = _send_reply_info(args.agent_ref, result["id"])
                 if reply_info:
                     result.update(reply_info)
@@ -2003,7 +2094,7 @@ def main(argv=None):
             )
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref)
+                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command in ("pause", "cancel"):
@@ -2013,7 +2104,7 @@ def main(argv=None):
                 args.author,
             )
             result["waited"] = False
-            result["nudge"] = nudge_agent(args.agent_ref)
+            result["nudge"] = nudge_agent(args.agent_ref, wait=True)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command == "set-heartbeat":
@@ -2048,6 +2139,60 @@ def main(argv=None):
         if args.agent_command == "uninstall-cron":
             print(json.dumps(uninstall_agent_cron(), indent=2, sort_keys=True))
             return
+    if args.command == "discord":
+        if args.discord_command is None:
+            discord_parser.print_help()
+            raise SystemExit(2)
+        if args.discord_command == "setup":
+            owner_host = args.owner_host or current_hostname()
+            result = setup_discord(
+                args.bot_token,
+                args.guild_id,
+                args.user_id,
+                args.category_id,
+                owner_host,
+            )
+            if owner_host == current_hostname():
+                result["scheduler"] = install_agent_cron()
+            else:
+                result["scheduler"] = {
+                    "changed": False,
+                    "hostname": owner_host,
+                    "skipped": True,
+                }
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.discord_command == "status":
+            print(json.dumps(discord_status(), indent=2, sort_keys=True))
+            return
+        if args.discord_command == "uninstall":
+            print(
+                json.dumps(
+                    uninstall_discord(
+                        delete_channels=args.delete_channels,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
+        if args.discord_command == "tick":
+            print(
+                json.dumps(
+                    {
+                        "discord_bridges": sync_discord_bridges(),
+                        "discord_ingress": ingest_discord(),
+                        "discord_flush": flush_discord_turns(),
+                        "discord_egress": deliver_discord_updates(),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
+    if args.command == "tick":
+        print(json.dumps(_system_tick(), indent=2, sort_keys=True))
+        return
     if args.command == "create":
         _create_task_template(args.filename)
         return
