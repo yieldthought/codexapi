@@ -566,7 +566,7 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("export CODEXAPI_HOSTNAME=stable-host", text)
             self.assertIn("export PATH=", text)
             self.assertIn("/tmp/venv/bin:/usr/bin", text)
-            self.assertIn("exec /tmp/venv/bin/python -m codexapi agent tick", text)
+            self.assertIn("exec /tmp/venv/bin/python -m codexapi tick", text)
 
     def test_upsert_cron_line_keeps_different_homes_separate(self):
         line_a = render_cron_line(home="/tmp/home-a", hostname="host-a")
@@ -710,6 +710,50 @@ class AgentsTests(unittest.TestCase):
             self.assertEqual(shown["state"]["avg_tokens_per_hour"], 50.0)
             self.assertEqual(shown["state"]["reply"], "Message handled.")
             self.assertEqual(shown["unread_message_count"], 0)
+
+    def test_nudge_agent_can_spawn_async_process(self):
+        calls = []
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):
+                calls.append((cmd, kwargs))
+
+        with _temp_home() as home:
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+            )
+            with patch("codexapi.agents.subprocess.Popen", FakePopen):
+                result = nudge_agent(
+                    agent["id"],
+                    home=home,
+                    hostname="host-a",
+                    wait=False,
+                )
+        self.assertTrue(result["ran"])
+        self.assertTrue(result["spawned"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0][-2:], ["run", agent["id"]])
+
+    def test_tick_spawns_one_process_per_due_local_agent(self):
+        calls = []
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):
+                calls.append((cmd, kwargs))
+
+        with _temp_home() as home:
+            first = start_agent("First job.", hostname="host-a")
+            second = start_agent("Second job.", hostname="host-a")
+            start_agent("Remote job.", hostname="host-b")
+            with patch("codexapi.agents.subprocess.Popen", FakePopen):
+                result = tick(home=home, hostname="host-a")
+        self.assertTrue(result["ran"])
+        self.assertEqual(result["processed"], 2)
+        self.assertEqual(result["woken"], 2)
+        self.assertEqual(len(calls), 2)
+        spawned = sorted(call[0][-1] for call in calls)
+        self.assertEqual(spawned, sorted([first["id"], second["id"]]))
 
     def test_codex_rollout_usage_uses_latest_event_after_start(self):
         started = datetime(2026, 3, 6, 8, 0, 5, tzinfo=timezone.utc)

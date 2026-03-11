@@ -26,6 +26,7 @@ from .agents import (
     nudge_agent,
     read_agent as read_managed_agent,
     read_agentbook,
+    run_agent as run_managed_agent,
     send_agent,
     set_agent_heartbeat,
     show_agent as show_managed_agent,
@@ -223,6 +224,7 @@ def _print_managed_agent_status(result, include_actions=False):
         print(f"Status: {final_json.get('status') or '-'}")
         print(f"Continue: {str(bool(final_json.get('continue'))).lower()}")
         print(f"Reply: {final_json.get('reply') or '-'}")
+        print(f"Update: {final_json.get('update') or '-'}")
         print(f"Notify: {final_json.get('notify') or '-'}")
         return
     final_output = result.get("final_output") or ""
@@ -273,6 +275,10 @@ def _warn_agent_scheduler_missing():
     print(f"Install it with: {_agent_install_cron_command()}", file=sys.stderr)
 
 
+def _system_tick():
+    return {"agents": tick_managed_agents()}
+
+
 def _send_reply_info(agent_ref, message_id):
     """Return the matching run reply for one sent message, if already delivered."""
     shown = show_managed_agent(agent_ref)
@@ -286,9 +292,12 @@ def _send_reply_info(agent_ref, message_id):
                 "run_id": run.get("id") or "",
             }
             reply = run.get("reply") or ""
+            update = run.get("update") or ""
             error = run.get("error") or ""
             if reply:
                 info["agent_reply"] = reply
+            if update:
+                info["agent_update"] = update
             if error:
                 info["agent_error"] = error
             return info
@@ -319,6 +328,7 @@ def _print_managed_agent_show(result):
     )
     print(f"Activity: {_state_text(state.get('activity'))}")
     print(f"Reply: {_state_text(state.get('reply'))}")
+    print(f"Update: {_state_text(state.get('update'))}")
     print(f"Last error: {_state_text(state.get('last_error'))}")
     print(f"Last wake: {_state_time(state.get('last_wake_at'))}")
     print(f"Last success: {_state_time(state.get('last_success_at'))}")
@@ -448,11 +458,14 @@ def _format_managed_agent_run(run):
     tokens = _format_token_total(usage.get("total_tokens"))
     status = run.get("error") or run.get("status") or "-"
     reply = run.get("reply") or ""
+    update = run.get("update") or ""
     message_count = len(run.get("messages") or [])
     parts = [started, reason, tokens]
     if message_count:
         parts.append(f"msgs={message_count}")
     summary = _truncate_head(_single_line(status), 60)
+    if update:
+        summary = _truncate_head(f"{summary} | {_single_line(update)}", 100)
     if reply:
         summary = _truncate_head(f"{summary} | {_single_line(reply)}", 100)
     parts.append(summary)
@@ -1539,6 +1552,12 @@ def main(argv=None):
         help="Show the effective host and CODEXAPI_HOME for agents.",
     )
 
+    agent_run = agent_subparsers.add_parser(
+        "run",
+        help=argparse.SUPPRESS,
+    )
+    agent_run.add_argument("agent_ref", help=argparse.SUPPRESS)
+
     agent_show = agent_subparsers.add_parser(
         "show",
         help="Show one durable agent.",
@@ -1641,6 +1660,11 @@ def main(argv=None):
     agent_subparsers.add_parser(
         "uninstall-cron",
         help="Remove the cron entry for this CODEXAPI_HOME.",
+    )
+
+    subparsers.add_parser(
+        "tick",
+        help="Run one full background tick.",
     )
 
     task_parser = subparsers.add_parser(
@@ -1958,7 +1982,7 @@ def main(argv=None):
             )
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(result["id"])
+                result["nudge"] = nudge_agent(result["id"], wait=True)
             _warn_agent_scheduler_missing()
             print(json.dumps(result, indent=2, sort_keys=True))
             return
@@ -1967,6 +1991,9 @@ def main(argv=None):
             return
         if args.agent_command == "whoami":
             _print_managed_agent_identity()
+            return
+        if args.agent_command == "run":
+            print(json.dumps(run_managed_agent(args.agent_ref), indent=2, sort_keys=True))
             return
         if args.agent_command == "show":
             _print_managed_agent_show(show_managed_agent(args.agent_ref))
@@ -1989,7 +2016,7 @@ def main(argv=None):
             result = send_agent(args.agent_ref, args.message, args.author)
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref)
+                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
                 reply_info = _send_reply_info(args.agent_ref, result["id"])
                 if reply_info:
                     result.update(reply_info)
@@ -2003,7 +2030,7 @@ def main(argv=None):
             )
             result["waited"] = bool(args.wait)
             if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref)
+                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command in ("pause", "cancel"):
@@ -2013,7 +2040,7 @@ def main(argv=None):
                 args.author,
             )
             result["waited"] = False
-            result["nudge"] = nudge_agent(args.agent_ref)
+            result["nudge"] = nudge_agent(args.agent_ref, wait=True)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command == "set-heartbeat":
@@ -2048,6 +2075,9 @@ def main(argv=None):
         if args.agent_command == "uninstall-cron":
             print(json.dumps(uninstall_agent_cron(), indent=2, sort_keys=True))
             return
+    if args.command == "tick":
+        print(json.dumps(_system_tick(), indent=2, sort_keys=True))
+        return
     if args.command == "create":
         _create_task_template(args.filename)
         return

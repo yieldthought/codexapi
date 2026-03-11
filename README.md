@@ -158,6 +158,10 @@ codexapi agent whoami
 codexapi agent install-cron
 ```
 
+`codexapi agent install-cron` installs one background scheduler hook for this
+`CODEXAPI_HOME`. The wrapper runs `codexapi tick`, which drives the durable
+agent wake scan.
+
 If you skip `install-cron`, `codexapi agent start` warns on stderr because
 background wakes will not run until the scheduler hook is installed.
 When `gh` is installed and authenticated, `agent start` also captures a
