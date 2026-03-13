@@ -3,6 +3,7 @@
 import json
 import os
 import random
+import signal
 import shlex
 import shutil
 import socket
@@ -10,6 +11,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -50,6 +52,11 @@ _COMMAND_KINDS = {"send", "wake", "pause", "resume", "cancel"}
 _STOP_POLICIES = {"until_done", "until_stopped"}
 _TERMINAL_STATES = {"done", "canceled"}
 _ACTIVE_STATES = {"ready", "error", "running", "paused"}
+_STALE_MIN_SECONDS = 30 * 60
+_STALE_HEARTBEAT_MULTIPLIER = 3
+_RECOVER_TERM_TIMEOUT = 3.0
+_RECOVER_KILL_TIMEOUT = 3.0
+_RECOVER_POLL_INTERVAL = 0.1
 
 
 def codexapi_home():
@@ -223,6 +230,11 @@ def show_agent(agent_ref, home=None):
     snapshot["state"] = _read_json(agent_dir / "state.json")
     snapshot["state"]["child_ids"] = snapshot["child_ids"]
     snapshot["state"]["unread_message_count"] = snapshot["unread_message_count"]
+    snapshot["state"]["run_lock_held"] = snapshot["run_lock_held"]
+    snapshot["state"]["last_event_at"] = snapshot["last_event_at"]
+    snapshot["state"]["stale"] = snapshot["stale"]
+    snapshot["state"]["stale_after_seconds"] = snapshot["stale_after_seconds"]
+    snapshot["state"]["stale_for_seconds"] = snapshot["stale_for_seconds"]
     snapshot["session"] = _read_session(agent_dir)
     snapshot["recent_runs"] = _recent_runs(agent_dir, 5)
     snapshot["parent"] = _agent_brief(home, snapshot["parent_id"], child_map)
@@ -256,6 +268,11 @@ def status_agent(agent_ref, home=None, include_actions=False):
         "tools": [],
         "final_output": "",
         "final_json": None,
+        "run_lock_held": snapshot["run_lock_held"],
+        "last_event_at": snapshot["last_event_at"],
+        "stale": snapshot["stale"],
+        "stale_after_seconds": snapshot["stale_after_seconds"],
+        "stale_for_seconds": snapshot["stale_for_seconds"],
     }
     if rollout_path is None or not rollout_path.exists():
         return result
@@ -266,9 +283,13 @@ def status_agent(agent_ref, home=None, include_actions=False):
     run_lock_path = agent_dir / "hosts" / snapshot["hostname"] / "run.lock"
     turn_state = "complete"
     if not turn["ended_at"]:
-        turn_state = "active" if _run_lock_held(run_lock_path) else "interrupted"
+        if _run_lock_held(run_lock_path):
+            turn_state = "stale" if snapshot["stale"] else "active"
+        else:
+            turn_state = "interrupted"
     result.update(turn)
     result["turn_state"] = turn_state
+    result["last_event_at"] = turn.get("last_event_at") or result["last_event_at"]
     return result
 
 
@@ -406,6 +427,56 @@ def set_agent_heartbeat(agent_ref, heartbeat_minutes, home=None, now=None):
         "rescheduled": rescheduled,
         "applies_after_current_run": bool(running),
         "next_wake_at": state.get("next_wake_at") or "",
+    }
+
+
+def recover_agent(agent_ref, home=None, hostname=None, now=None):
+    """Recover one local running agent by clearing a stuck wake and requeueing it."""
+    home = _resolve_home(home)
+    host = hostname or current_hostname()
+    now = now or utc_now()
+    agent_dir = resolve_agent_dir(agent_ref, home)
+    meta = _read_json(agent_dir / "meta.json")
+    if meta["hostname"] != host:
+        raise ValueError("Cannot recover a remote agent from this host.")
+    state_path = agent_dir / "state.json"
+    state = _read_json(state_path)
+    if (state.get("status") or "") != "running":
+        raise ValueError("Recover only applies to agents in the running state.")
+    session_path = agent_dir / "hosts" / meta["hostname"] / "session.json"
+    session = _read_json(session_path)
+    runtime = _agent_runtime(agent_dir, meta, state, session, now)
+    signal_result = {
+        "pid": None,
+        "pgid": None,
+        "sent_sigterm": False,
+        "sent_sigkill": False,
+    }
+    if runtime["run_lock_held"]:
+        signal_result = _recover_run_lock(
+            agent_dir / "hosts" / meta["hostname"] / "run.lock"
+        )
+    state = _read_json(state_path)
+    session = _read_json(session_path)
+    state["status"] = "error"
+    state["last_error"] = "Recovered stuck wake."
+    state["activity"] = state["last_error"]
+    state["wake_requested_at"] = format_utc(now)
+    _sync_state_from_session(state, session)
+    _write_json(state_path, state)
+    return {
+        "id": meta["id"],
+        "name": meta["name"],
+        "status": state["status"],
+        "recovered": True,
+        "run_lock_held": runtime["run_lock_held"],
+        "last_event_at": runtime["last_event_at"],
+        "stale": runtime["stale"],
+        "stale_after_seconds": runtime["stale_after_seconds"],
+        "stale_for_seconds": runtime["stale_for_seconds"],
+        "wake_requested_at": state["wake_requested_at"],
+        "last_error": state["last_error"],
+        "signal": signal_result,
     }
 
 
@@ -1024,6 +1095,8 @@ def _queue_command(agent_ref, kind, body, author, home, hostname, now):
 def _snapshot(agent_dir, child_map=None):
     meta = _read_json(agent_dir / "meta.json")
     state = _read_json(agent_dir / "state.json")
+    session = _read_session(agent_dir)
+    runtime = _agent_runtime(agent_dir, meta, state, session)
     if child_map is None:
         child_ids = _child_map(agent_dir.parents[1]).get(meta["id"], [])
     else:
@@ -1057,7 +1130,48 @@ def _snapshot(agent_dir, child_map=None):
         "activity": state.get("activity") or "",
         "reply": state.get("reply") or "",
         "update": state.get("update") or "",
+        "run_lock_held": runtime["run_lock_held"],
+        "last_event_at": runtime["last_event_at"],
+        "stale": runtime["stale"],
+        "stale_after_seconds": runtime["stale_after_seconds"],
+        "stale_for_seconds": runtime["stale_for_seconds"],
     }
+
+
+def _agent_runtime(agent_dir, meta, state, session=None, now=None):
+    """Return live wake health for one agent."""
+    run_lock_path = agent_dir / "hosts" / meta["hostname"] / "run.lock"
+    run_lock_held = _run_lock_held(run_lock_path)
+    stale_after_seconds = _stale_after_seconds(meta.get("heartbeat_minutes") or 0)
+    info = {
+        "run_lock_held": run_lock_held,
+        "last_event_at": "",
+        "stale": False,
+        "stale_after_seconds": stale_after_seconds,
+        "stale_for_seconds": 0,
+    }
+    if (state.get("status") or "") != "running" and not run_lock_held:
+        return info
+    now = now or utc_now()
+    session = session or _read_session(agent_dir)
+    thread_id = session.get("thread_id") or state.get("thread_id") or ""
+    rollout_path = _resolve_rollout_path(session.get("rollout_path"), thread_id)
+    if rollout_path is not None and rollout_path.exists():
+        turn = _last_rollout_turn(_rollout_events(rollout_path))
+        if turn is not None:
+            info["last_event_at"] = turn.get("last_event_at") or turn.get("started_at") or ""
+    last_progress_at = parse_utc(info["last_event_at"]) or parse_utc(state.get("last_wake_at"))
+    if last_progress_at is None:
+        return info
+    idle = max(0, int((now - last_progress_at).total_seconds()))
+    info["stale_for_seconds"] = idle
+    info["stale"] = run_lock_held and idle >= stale_after_seconds
+    return info
+
+
+def _stale_after_seconds(heartbeat_minutes):
+    minutes = int(heartbeat_minutes or 0)
+    return max(_STALE_MIN_SECONDS, minutes * 60 * _STALE_HEARTBEAT_MULTIPLIER)
 
 
 def _choose_name(home, prompt, requested):
@@ -1185,6 +1299,69 @@ def _run_lock_held(path):
     """Return true when the per-agent run lock is currently held."""
     with _try_lock(path) as handle:
         return handle is None
+
+
+def _lock_info(path):
+    try:
+        return _read_json(path)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _signal_run_process(pid, sig):
+    """Signal the wake process group when possible, else just the pid."""
+    pgid = None
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        pgid = None
+    if pgid is not None:
+        os.killpg(pgid, sig)
+    else:
+        os.kill(pid, sig)
+    return pgid
+
+
+def _wait_for_lock_release(path, timeout_seconds):
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        if not _run_lock_held(path):
+            return True
+        time.sleep(_RECOVER_POLL_INTERVAL)
+    return not _run_lock_held(path)
+
+
+def _recover_run_lock(path):
+    """Terminate the current lock holder and wait for the wake lock to clear."""
+    if not _run_lock_held(path):
+        return {
+            "pid": None,
+            "pgid": None,
+            "sent_sigterm": False,
+            "sent_sigkill": False,
+        }
+    info = _lock_info(path)
+    pid = _usage_int(info.get("pid"))
+    if pid is None:
+        raise ValueError("Run lock is held but has no recorded pid.")
+    result = {
+        "pid": pid,
+        "pgid": None,
+        "sent_sigterm": False,
+        "sent_sigkill": False,
+    }
+    try:
+        result["pgid"] = _signal_run_process(pid, signal.SIGTERM)
+        result["sent_sigterm"] = True
+    except ProcessLookupError:
+        result["pgid"] = None
+    if _wait_for_lock_release(path, _RECOVER_TERM_TIMEOUT):
+        return result
+    result["pgid"] = _signal_run_process(pid, signal.SIGKILL)
+    result["sent_sigkill"] = True
+    if _wait_for_lock_release(path, _RECOVER_KILL_TIMEOUT):
+        return result
+    raise ValueError("Run lock stayed held after SIGTERM/SIGKILL.")
 
 
 def _read_session(agent_dir):
@@ -1559,6 +1736,7 @@ def _last_rollout_turn(events, include_actions=False):
 
     started = turn_events[0]
     started_payload = started.get("payload") or {}
+    last_event_at = ""
     progress_events = []
     assistant_events = []
     tools = []
@@ -1567,6 +1745,7 @@ def _last_rollout_turn(events, include_actions=False):
     task_complete_message = ""
 
     for event in turn_events:
+        last_event_at = event.get("timestamp") or last_event_at
         payload = event.get("payload") or {}
         event_type = event.get("type")
         payload_type = payload.get("type")
@@ -1623,6 +1802,7 @@ def _last_rollout_turn(events, include_actions=False):
         "turn_id": started_payload.get("turn_id") or "",
         "started_at": started.get("timestamp") or "",
         "ended_at": ended_at,
+        "last_event_at": last_event_at,
         "progress": progress,
         "tools": tools,
         "final_output": final_output,

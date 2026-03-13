@@ -26,6 +26,7 @@ from .agents import (
     nudge_agent,
     read_agent as read_managed_agent,
     read_agentbook,
+    recover_agent as recover_managed_agent,
     run_agent as run_managed_agent,
     send_agent,
     set_agent_heartbeat,
@@ -201,6 +202,8 @@ def _print_managed_agent_status(result, include_actions=False):
     print(f"Ended: {result.get('ended_at') or '-'}")
     print(f"CWD: {result.get('cwd') or '-'}")
     print(f"Rollout: {result.get('rollout_path') or '-'}")
+    print(f"Last event: {result.get('last_event_at') or '-'}")
+    print(f"Stale: {_stale_text(result)}")
     progress = result.get("progress") or []
     print("Progress:")
     if not progress:
@@ -319,6 +322,8 @@ def _print_managed_agent_show(result):
     print(f"CWD: {meta['cwd']}")
     print(f"Agentbook: {result.get('agentbook_path') or '-'}")
     print(f"Thread: {state.get('thread_id') or '-'}")
+    print(f"Last event: {result.get('last_event_at') or '-'}")
+    print(f"Stale: {_stale_text(result)}")
     print(
         "Tokens: "
         f"{_format_token_total(state.get('total_tokens'))} total "
@@ -411,6 +416,12 @@ def _policy_label(stop_policy):
 
 def _next_wake_label(item):
     status = item.get("status") or ""
+    if status == "running":
+        if item.get("stale"):
+            return "stale"
+        if item.get("run_lock_held"):
+            return "run"
+        return "lost"
     if status in ("done", "canceled"):
         return "-"
     if status == "paused":
@@ -449,6 +460,16 @@ def _state_text(value):
 
 def _state_time(value):
     return value or "-"
+
+
+def _stale_text(item):
+    if not item.get("run_lock_held"):
+        return "no"
+    threshold = _format_duration(item.get("stale_after_seconds"))
+    idle = _format_duration(item.get("stale_for_seconds"))
+    if item.get("stale"):
+        return f"yes ({idle} idle; threshold {threshold})"
+    return f"no ({idle} idle; threshold {threshold})"
 
 
 def _format_managed_agent_run(run):
@@ -1624,6 +1645,17 @@ def main(argv=None):
                 help="Wait for a local wake after queueing the command.",
             )
 
+    agent_recover = agent_subparsers.add_parser(
+        "recover",
+        help="Terminate a stuck local wake, mark it recoverable, and optionally wait for a fresh wake.",
+    )
+    agent_recover.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
+    agent_recover.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for a local wake after recovery.",
+    )
+
     agent_set_heartbeat = agent_subparsers.add_parser(
         "set-heartbeat",
         help="Update the heartbeat interval for one durable agent.",
@@ -2041,6 +2073,13 @@ def main(argv=None):
             )
             result["waited"] = False
             result["nudge"] = nudge_agent(args.agent_ref, wait=True)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if args.agent_command == "recover":
+            result = recover_managed_agent(args.agent_ref)
+            result["waited"] = bool(args.wait)
+            if args.wait:
+                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command == "set-heartbeat":

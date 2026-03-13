@@ -28,6 +28,7 @@ from codexapi.agents import (
     nudge_agent,
     read_agent,
     read_agentbook,
+    recover_agent,
     render_cron_line,
     send_agent,
     set_agent_heartbeat,
@@ -42,6 +43,7 @@ from codexapi.cli import (
     _print_managed_agent_identity,
     _print_managed_agent_list,
     _print_managed_agent_show,
+    _print_managed_agent_status,
     main as cli_main,
 )
 
@@ -306,7 +308,12 @@ class AgentsTests(unittest.TestCase):
             with patch("codexapi.agents.Agent", FakeAgent):
                 with patch(
                     "codexapi.agents.utc_now",
-                    side_effect=[start, start + timedelta(seconds=1), end],
+                    side_effect=[
+                        start,
+                        start + timedelta(seconds=1),
+                        start + timedelta(seconds=2),
+                        end,
+                    ],
                 ):
                     result = nudge_agent(
                         parent["id"],
@@ -1153,6 +1160,150 @@ class AgentsTests(unittest.TestCase):
             shown = show_agent(agent["id"])
             self.assertEqual(shown["meta"]["heartbeat_minutes"], 12)
 
+    def test_cli_views_mark_stale_running_agent(self):
+        start = datetime(2026, 3, 9, 14, 0, tzinfo=timezone.utc)
+        stale_now = start + timedelta(hours=2)
+
+        with _temp_home() as home:
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+                heartbeat_minutes=5,
+                now=start,
+            )
+            state_path = home / "agents" / agent["id"] / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["status"] = "running"
+            state["last_wake_at"] = format_utc(start)
+            state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            rollout = home / "rollouts" / "rollout-thread-stale.jsonl"
+            _write_rollout(
+                rollout,
+                [
+                    {
+                        "timestamp": "2026-03-09T14:00:00Z",
+                        "type": "event_msg",
+                        "payload": {"type": "task_started", "turn_id": "turn-stale"},
+                    },
+                    {
+                        "timestamp": "2026-03-09T14:00:10Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "message": "Still checking.",
+                        },
+                    },
+                ],
+            )
+            _set_rollout_session(home, agent["id"], "host-a", "thread-stale", rollout)
+
+            lock_path = home / "agents" / agent["id"] / "hosts" / "host-a" / "run.lock"
+            with patch("codexapi.agents.utc_now", return_value=stale_now):
+                with _try_lock(lock_path) as handle:
+                    self.assertIsNotNone(handle)
+                    shown = show_agent(agent["id"])
+                    status = status_agent(agent["id"])
+
+                    list_out = io.StringIO()
+                    with redirect_stdout(list_out):
+                        _print_managed_agent_list([shown])
+
+                    show_out = io.StringIO()
+                    with redirect_stdout(show_out):
+                        _print_managed_agent_show(shown)
+
+                    status_out = io.StringIO()
+                    with redirect_stdout(status_out):
+                        _print_managed_agent_status(status)
+
+            self.assertTrue(shown["run_lock_held"])
+            self.assertTrue(shown["stale"])
+            self.assertEqual(shown["last_event_at"], "2026-03-09T14:00:10Z")
+            self.assertEqual(status["turn_state"], "stale")
+            self.assertEqual(status["last_event_at"], "2026-03-09T14:00:10Z")
+            self.assertIn("stale", list_out.getvalue())
+            self.assertIn("Stale: yes", show_out.getvalue())
+            self.assertIn("Turn: turn-stale [stale]", status_out.getvalue())
+
+    def test_recover_agent_marks_running_agent_error_and_requests_wake(self):
+        start = datetime(2026, 3, 9, 14, 0, tzinfo=timezone.utc)
+        recover_at = start + timedelta(hours=2)
+
+        with _temp_home() as home:
+            agent = start_agent(
+                "Handle messages.",
+                hostname="host-a",
+                heartbeat_minutes=5,
+                now=start,
+            )
+            state_path = home / "agents" / agent["id"] / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["status"] = "running"
+            state["last_wake_at"] = format_utc(start)
+            state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            lock_path = home / "agents" / agent["id"] / "hosts" / "host-a" / "run.lock"
+            lock_path.write_text(
+                json.dumps(
+                    {"pid": 4321, "hostname": "host-a", "started_at": format_utc(start)}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch(
+                "codexapi.agents._agent_runtime",
+                return_value={
+                    "run_lock_held": True,
+                    "last_event_at": "2026-03-09T14:00:10Z",
+                    "stale": True,
+                    "stale_after_seconds": 1800,
+                    "stale_for_seconds": 7190,
+                },
+            ):
+                with patch(
+                    "codexapi.agents._recover_run_lock",
+                    return_value={
+                        "pid": 4321,
+                        "pgid": 4321,
+                        "sent_sigterm": True,
+                        "sent_sigkill": False,
+                    },
+                ) as recover_lock:
+                    result = recover_agent(agent["id"], hostname="host-a", now=recover_at)
+
+            shown = show_agent(agent["id"])
+            recover_lock.assert_called_once()
+            self.assertEqual(recover_lock.call_args[0][0], lock_path.resolve())
+            self.assertTrue(result["recovered"])
+            self.assertTrue(result["stale"])
+            self.assertEqual(result["signal"]["pid"], 4321)
+            self.assertEqual(shown["state"]["status"], "error")
+            self.assertEqual(shown["state"]["last_error"], "Recovered stuck wake.")
+            self.assertEqual(shown["state"]["wake_requested_at"], format_utc(recover_at))
+
+    def test_cli_recover_wait_nudges_after_recovery(self):
+        with _temp_home():
+            agent = start_agent("Handle messages.", hostname="host-a")
+            output = io.StringIO()
+            with patch(
+                "codexapi.cli.recover_managed_agent",
+                return_value={"id": agent["id"], "name": agent["name"], "status": "error"},
+            ) as recover_mock:
+                with patch(
+                    "codexapi.cli.nudge_agent",
+                    return_value={"ran": True, "woken": 1},
+                ) as nudge_mock:
+                    with redirect_stdout(output):
+                        cli_main(["agent", "recover", "--wait", agent["id"]])
+            payload = json.loads(output.getvalue())
+            recover_mock.assert_called_once_with(agent["id"])
+            nudge_mock.assert_called_once_with(agent["id"], wait=True)
+            self.assertTrue(payload["waited"])
+            self.assertEqual(payload["nudge"]["woken"], 1)
+
     def test_status_agent_returns_latest_completed_turn(self):
         with _temp_home() as home:
             agent = start_agent("Handle messages.", hostname="host-a")
@@ -1358,7 +1509,11 @@ class AgentsTests(unittest.TestCase):
             lock_path = home / "agents" / agent["id"] / "hosts" / "host-a" / "run.lock"
             with _try_lock(lock_path) as handle:
                 self.assertIsNotNone(handle)
-                result = status_agent(agent["id"])
+                with patch(
+                    "codexapi.agents.utc_now",
+                    return_value=datetime(2026, 3, 9, 14, 5, tzinfo=timezone.utc),
+                ):
+                    result = status_agent(agent["id"])
 
             self.assertEqual(result["turn_id"], "turn-active")
             self.assertEqual(result["turn_state"], "active")
