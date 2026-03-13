@@ -27,4 +27,4 @@ __all__ = [
     "task_result",
     "lead",
 ]
-__version__ = "0.12.0"
+__version__ = "0.12.1"
