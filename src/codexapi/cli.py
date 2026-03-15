@@ -158,20 +158,21 @@ def _print_managed_agent_list(items):
     if not items:
         print("No agents.")
         return
-    print("ID       STAT     POL  HOST         UNR TOKENS  TOK/H   NEXT REPO         NAME")
+    print("ID       STAT      POL  HOST         QMSG QCMD TOKENS  TOK/H   NEXT REPO         NAME")
     for item in items:
         ident = item["id"][:8]
-        status = _truncate_head(item["status"] or "-", 8)
+        status = _truncate_head(item.get("display_status") or item.get("status") or "-", 9)
         policy = _truncate_head(_policy_label(item.get("stop_policy")), 4)
         host = _truncate_head(item["hostname"] or "-", 12)
-        unread = str(item["unread_message_count"])
+        queued_messages = str(item["unread_message_count"])
+        queued_commands = str(int(item.get("pending_command_count") or 0))
         tokens = _format_token_total(item["total_tokens"])
         tok_h = _format_token_rate(item.get("avg_tokens_per_hour"))
         next_wake = _truncate_head(_next_wake_label(item), 6)
         repo = _truncate_head(_repo_label(item.get("cwd")), 12)
         name = item["name"]
         print(
-            f"{ident:<8} {status:<8} {policy:<4} {host:<12} {unread:>3} {tokens:>6} {tok_h:>7} {next_wake:>6} {repo:<12} {name}"
+            f"{ident:<8} {status:<9} {policy:<4} {host:<12} {queued_messages:>4} {queued_commands:>4} {tokens:>6} {tok_h:>7} {next_wake:>6} {repo:<12} {name}"
         )
 
 
@@ -196,6 +197,7 @@ def _print_managed_agent_read(result):
 def _print_managed_agent_status(result, include_actions=False):
     print(f"{result['name']} [{result['agent_status'] or '-'}]")
     print(f"ID: {result['id']}")
+    print(f"State: {result.get('state_status') or '-'}")
     print(f"Thread: {result.get('thread_id') or '-'}")
     print(f"Turn: {result.get('turn_id') or '-'} [{result.get('turn_state') or '-'}]")
     print(f"Started: {result.get('started_at') or '-'}")
@@ -204,6 +206,8 @@ def _print_managed_agent_status(result, include_actions=False):
     print(f"Rollout: {result.get('rollout_path') or '-'}")
     print(f"Last event: {result.get('last_event_at') or '-'}")
     print(f"Stale: {_stale_text(result)}")
+    print(f"Queued messages: {result.get('queued_message_count') or 0}")
+    print(f"Pending commands: {_pending_commands_text(result.get('pending_commands'))}")
     progress = result.get("progress") or []
     print("Progress:")
     if not progress:
@@ -310,20 +314,22 @@ def _send_reply_info(agent_ref, message_id):
 def _print_managed_agent_show(result):
     meta = result["meta"]
     state = result["state"]
-    print(f"{meta['name']} [{state.get('status') or '-'}]")
+    print(f"{meta['name']} [{result.get('display_status') or state.get('status') or '-'}]")
     print(f"ID: {meta['id']}")
     print(f"Host: {meta['hostname']}")
     print(f"Created: {meta['created_at']} by {meta['created_by']}")
     print(f"Parent: {_related_label(result.get('parent'))}")
     print(f"Children: {_children_label(result.get('children'))}")
     print(
-        f"Policy: {meta['stop_policy']}  Heartbeat: {meta['heartbeat_minutes']}m  Unread: {result['unread_message_count']}"
+        f"Policy: {meta['stop_policy']}  Heartbeat: {meta['heartbeat_minutes']}m  Qmsg: {result['unread_message_count']}  Qcmd: {result.get('pending_command_count') or 0}"
     )
     print(f"CWD: {meta['cwd']}")
     print(f"Agentbook: {result.get('agentbook_path') or '-'}")
+    print(f"State: {state.get('status') or '-'}")
     print(f"Thread: {state.get('thread_id') or '-'}")
     print(f"Last event: {result.get('last_event_at') or '-'}")
     print(f"Stale: {_stale_text(result)}")
+    print(f"Pending commands: {_pending_commands_text(result.get('pending_commands'))}")
     print(
         "Tokens: "
         f"{_format_token_total(state.get('total_tokens'))} total "
@@ -416,12 +422,15 @@ def _policy_label(stop_policy):
 
 def _next_wake_label(item):
     status = item.get("status") or ""
+    display_status = item.get("display_status") or status
     if status == "running":
         if item.get("stale"):
             return "stale"
         if item.get("run_lock_held"):
             return "run"
         return "lost"
+    if display_status in ("resuming", "waking", "pausing", "canceling"):
+        return "wake"
     if status in ("done", "canceled"):
         return "-"
     if status == "paused":
@@ -470,6 +479,13 @@ def _stale_text(item):
     if item.get("stale"):
         return f"yes ({idle} idle; threshold {threshold})"
     return f"no ({idle} idle; threshold {threshold})"
+
+
+def _pending_commands_text(value):
+    commands = [str(item or "") for item in value or [] if str(item or "").strip()]
+    if not commands:
+        return "-"
+    return ", ".join(commands)
 
 
 def _format_managed_agent_run(run):
@@ -2047,8 +2063,8 @@ def main(argv=None):
         if args.agent_command == "send":
             result = send_agent(args.agent_ref, args.message, args.author)
             result["waited"] = bool(args.wait)
+            result["nudge"] = nudge_agent(args.agent_ref, wait=bool(args.wait))
             if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
                 reply_info = _send_reply_info(args.agent_ref, result["id"])
                 if reply_info:
                     result.update(reply_info)
@@ -2061,8 +2077,7 @@ def main(argv=None):
                 args.author,
             )
             result["waited"] = bool(args.wait)
-            if args.wait:
-                result["nudge"] = nudge_agent(args.agent_ref, wait=True)
+            result["nudge"] = nudge_agent(args.agent_ref, wait=bool(args.wait))
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         if args.agent_command in ("pause", "cancel"):

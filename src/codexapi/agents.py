@@ -230,6 +230,8 @@ def show_agent(agent_ref, home=None):
     snapshot["state"] = _read_json(agent_dir / "state.json")
     snapshot["state"]["child_ids"] = snapshot["child_ids"]
     snapshot["state"]["unread_message_count"] = snapshot["unread_message_count"]
+    snapshot["state"]["pending_command_count"] = snapshot["pending_command_count"]
+    snapshot["state"]["pending_commands"] = snapshot["pending_commands"]
     snapshot["state"]["run_lock_held"] = snapshot["run_lock_held"]
     snapshot["state"]["last_event_at"] = snapshot["last_event_at"]
     snapshot["state"]["stale"] = snapshot["stale"]
@@ -256,7 +258,8 @@ def status_agent(agent_ref, home=None, include_actions=False):
     result = {
         "id": snapshot["id"],
         "name": snapshot["name"],
-        "agent_status": snapshot["status"],
+        "agent_status": snapshot["display_status"],
+        "state_status": snapshot["status"],
         "thread_id": session.get("thread_id") or snapshot.get("thread_id") or "",
         "rollout_path": str(rollout_path) if rollout_path else "",
         "turn_id": "",
@@ -273,6 +276,9 @@ def status_agent(agent_ref, home=None, include_actions=False):
         "stale": snapshot["stale"],
         "stale_after_seconds": snapshot["stale_after_seconds"],
         "stale_for_seconds": snapshot["stale_for_seconds"],
+        "pending_command_count": snapshot["pending_command_count"],
+        "pending_commands": snapshot["pending_commands"],
+        "queued_message_count": snapshot["unread_message_count"],
     }
     if rollout_path is None or not rollout_path.exists():
         return result
@@ -1097,13 +1103,17 @@ def _snapshot(agent_dir, child_map=None):
     state = _read_json(agent_dir / "state.json")
     session = _read_session(agent_dir)
     runtime = _agent_runtime(agent_dir, meta, state, session)
+    queued = _queued_commands(agent_dir)
+    queued_controls = [item for item in queued if item.get("kind") != "send"]
+    queued_kinds = [item.get("kind") or "" for item in queued_controls if item.get("kind")]
     if child_map is None:
         child_ids = _child_map(agent_dir.parents[1]).get(meta["id"], [])
     else:
         child_ids = child_map.get(meta["id"], [])
     unread = int(state.get("unread_message_count") or 0) + len(
-        _queued_send_commands(agent_dir)
+        [item for item in queued if item.get("kind") == "send"]
     )
+    status = state.get("status") or ""
     return {
         "id": meta["id"],
         "name": meta["name"],
@@ -1114,13 +1124,21 @@ def _snapshot(agent_dir, child_map=None):
         "cwd": meta["cwd"],
         "stop_policy": meta["stop_policy"],
         "heartbeat_minutes": meta["heartbeat_minutes"],
-        "status": state.get("status") or "",
+        "status": status,
+        "display_status": _display_status(
+            status,
+            queued_kinds,
+            runtime["run_lock_held"],
+            runtime["stale"],
+        ),
         "thread_id": state.get("thread_id") or "",
         "last_wake_at": state.get("last_wake_at") or "",
         "last_success_at": state.get("last_success_at") or "",
         "next_wake_at": state.get("next_wake_at") or "",
         "wake_requested_at": state.get("wake_requested_at") or "",
         "unread_message_count": unread,
+        "pending_command_count": len(queued_controls),
+        "pending_commands": queued_kinds,
         "input_tokens": int(state.get("input_tokens") or 0),
         "output_tokens": int(state.get("output_tokens") or 0),
         "total_tokens": int(state.get("total_tokens") or 0),
@@ -1554,7 +1572,29 @@ def _usage_int(value):
     return None
 
 
-def _queued_send_commands(agent_dir):
+def _display_status(status, pending_commands, run_lock_held, stale):
+    """Return a user-facing status that includes queued control intent."""
+    state = str(status or "")
+    commands = [str(kind or "") for kind in pending_commands or [] if kind]
+    if stale:
+        return "stale"
+    if commands:
+        last = commands[-1]
+        if last == "resume" and state in ("paused", "done"):
+            return "resuming"
+        if last == "pause" and state in ("ready", "error", "running"):
+            return "pausing"
+        if last == "cancel" and state != "canceled":
+            return "canceling"
+        if last == "wake" and state in ("ready", "error"):
+            return "waking"
+    if run_lock_held and state == "running":
+        return "running"
+    return state or ""
+
+
+def _queued_commands(agent_dir, kind=None):
+    """Return queued command payloads from commands/new."""
     queued = []
     new_dir = agent_dir / "commands" / "new"
     if not new_dir.exists():
@@ -1566,9 +1606,15 @@ def _queued_send_commands(agent_dir):
             payload = _read_json(path)
         except (FileNotFoundError, json.JSONDecodeError):
             continue
-        if payload.get("kind") == "send":
-            queued.append(payload)
+        payload_kind = payload.get("kind") or ""
+        if kind and payload_kind != kind:
+            continue
+        queued.append(payload)
     return queued
+
+
+def _queued_send_commands(agent_dir):
+    return _queued_commands(agent_dir, "send")
 
 
 def _has_new_commands(agent_dir):

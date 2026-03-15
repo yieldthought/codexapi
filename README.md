@@ -213,10 +213,16 @@ codexapi agent delete ci-fixer
 `codexapi agent resume` can reopen a `done` agent. Sending to a `done` or
 `canceled` agent still triggers a one-off wake on the next tick so you can get
 a reply without putting the agent back into continuous heartbeat mode.
+For local-owned agents, `send`, `wake`, and `resume` now also nudge an
+immediate non-blocking wake even without `--wait`; `--wait` only changes
+whether the CLI blocks for completion.
 `codexapi agent recover` is for a different failure mode: a local wake that is
 still marked `running` but has stopped making rollout progress. `agent list`,
 `agent show`, and `agent status` now surface stale running wakes, and `recover`
 terminates the stuck local wake, marks it recoverable, and queues a fresh one.
+`agent list` also surfaces queued operator intent for local commands, so a
+paused agent with a queued `resume` shows as `resuming` with separate queued
+message and queued command counts.
 
 Create a child agent explicitly:
 

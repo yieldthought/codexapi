@@ -1051,6 +1051,8 @@ class AgentsTests(unittest.TestCase):
             with redirect_stdout(list_out):
                 _print_managed_agent_list([shown])
             self.assertIn("POL", list_out.getvalue())
+            self.assertIn("QMSG", list_out.getvalue())
+            self.assertIn("QCMD", list_out.getvalue())
             self.assertIn("REPO", list_out.getvalue())
             self.assertIn("done", list_out.getvalue())
             self.assertIn("codexapi", list_out.getvalue())
@@ -1060,6 +1062,7 @@ class AgentsTests(unittest.TestCase):
                 _print_managed_agent_show(shown)
             text = show_out.getvalue()
             self.assertIn("Policy: until_done", text)
+            self.assertIn("Qmsg: 0  Qcmd: 0", text)
             self.assertIn("Tokens: 50 total (30 in, 20 out, 50.0/h)", text)
             self.assertIn("Prompt: Handle messages.", text)
             self.assertIn("Recent runs:", text)
@@ -1087,14 +1090,70 @@ class AgentsTests(unittest.TestCase):
                     hostname="host-a",
                 )
                 output = io.StringIO()
-                with redirect_stdout(output):
-                    cli_main(["agent", "send", agent["id"], "status"])
+                with patch(
+                    "codexapi.cli.nudge_agent",
+                    return_value={"ran": True, "woken": 1, "spawned": True},
+                ) as nudge_mock:
+                    with redirect_stdout(output):
+                        cli_main(["agent", "send", agent["id"], "status"])
                 payload = json.loads(output.getvalue())
                 self.assertFalse(payload["waited"])
-                self.assertNotIn("nudge", payload)
+                self.assertTrue(payload["nudge"]["spawned"])
+                nudge_mock.assert_called_once_with(agent["id"], wait=False)
                 shown = show_agent(agent["id"])
                 self.assertEqual(shown["unread_message_count"], 1)
                 self.assertEqual(shown["state"]["status"], "ready")
+
+    def test_cli_resume_without_wait_async_nudges_and_list_shows_resuming(self):
+        def fake_runner(meta, session, prompt):
+            return {
+                "message": json.dumps(
+                    {
+                        "status": "Still running",
+                        "continue": True,
+                        "reply": "Continuing.",
+                    }
+                ),
+                "thread_id": "thread-resume-ui",
+            }
+
+        with _temp_home():
+            agent = start_agent("Keep an eye on this.", hostname="host-a")
+            control_agent(agent["id"], "pause", hostname="host-a")
+            tick(hostname="host-a", runner=fake_runner)
+
+            output = io.StringIO()
+            with patch(
+                "codexapi.cli.nudge_agent",
+                return_value={"ran": True, "woken": 1, "spawned": True},
+            ) as nudge_mock:
+                with redirect_stdout(output):
+                    cli_main(["agent", "resume", agent["id"]])
+            payload = json.loads(output.getvalue())
+            self.assertFalse(payload["waited"])
+            self.assertTrue(payload["nudge"]["spawned"])
+            nudge_mock.assert_called_once_with(agent["id"], wait=False)
+
+            shown = show_agent(agent["id"])
+            self.assertEqual(shown["state"]["status"], "paused")
+            self.assertEqual(shown["display_status"], "resuming")
+            self.assertEqual(shown["pending_commands"], ["resume"])
+            self.assertEqual(shown["pending_command_count"], 1)
+
+            list_out = io.StringIO()
+            with redirect_stdout(list_out):
+                _print_managed_agent_list([shown])
+            self.assertIn("resuming", list_out.getvalue())
+            self.assertIn("QMSG", list_out.getvalue())
+            self.assertIn("QCMD", list_out.getvalue())
+
+            show_out = io.StringIO()
+            with redirect_stdout(show_out):
+                _print_managed_agent_show(shown)
+            text = show_out.getvalue()
+            self.assertIn("[resuming]", text)
+            self.assertIn("State: paused", text)
+            self.assertIn("Pending commands: resume", text)
 
     def test_cli_send_wait_shows_immediate_agent_reply(self):
         with _temp_home():
