@@ -10,6 +10,7 @@ updated before the agent responds.
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -66,6 +67,10 @@ Turns:
 Decision & Next Move:
 - <what you will do next>
 """
+_DATED_NOTE_RE = re.compile(r"(?m)^#{2,3}\s+\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?:\s*UTC)?)?")
+_LEADBOOK_LIMIT = 2000
+_LEADBOOK_HEADER_LIMIT = 900
+_LEADBOOK_TAIL_LIMIT = 1200
 
 
 def lead(
@@ -332,13 +337,13 @@ def _leadbook_retry_prompt(prompt, tick, path, leadbook, output):
 def _leadbook_block(path, leadbook):
     if not path:
         return ""
-    snippet = _snippet(leadbook, 2000)
+    snippet = _book_excerpt(leadbook, _LEADBOOK_LIMIT, _LEADBOOK_HEADER_LIMIT, _LEADBOOK_TAIL_LIMIT)
     return "\n".join(
         [
             f"Leadbook path: {path}",
             _LEADBOOK_INSTRUCTIONS,
             "",
-            "Leadbook (latest):",
+            "Leadbook (header + latest notes):",
             snippet,
         ]
     )
@@ -436,6 +441,71 @@ def _snippet(text, limit):
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "..."
+
+
+def _tail_snippet(text, limit):
+    text = str(text or "").strip()
+    if not text:
+        return "(empty)"
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[-limit:]
+    return "..." + text[-(limit - 3) :].lstrip()
+
+
+def _book_excerpt(text, limit, header_limit, tail_limit):
+    text = str(text or "").strip()
+    if not text:
+        return "(empty)"
+    if len(text) <= limit:
+        return text
+    header, notes = _split_book(text)
+    header = _snippet(header, header_limit) if header else ""
+    if not notes:
+        return header or _tail_snippet(text, limit)
+    marker = "\n\n[... older notes omitted ...]\n\n"
+    if not header:
+        return _latest_notes_snippet(notes, limit)
+    remaining = max(0, limit - len(header) - len(marker))
+    if remaining <= 0:
+        return _snippet(header, limit)
+    tail = _latest_notes_snippet(notes, min(tail_limit, remaining))
+    if not tail:
+        return header
+    combined = header.rstrip() + marker + tail.lstrip()
+    if len(combined) <= limit:
+        return combined
+    remaining = max(0, limit - len(header) - len(marker))
+    return header.rstrip() + marker + _latest_notes_snippet(notes, remaining).lstrip()
+
+
+def _split_book(text):
+    match = _DATED_NOTE_RE.search(text)
+    if not match:
+        return text.strip(), ""
+    return text[: match.start()].strip(), text[match.start() :].strip()
+
+
+def _latest_notes_snippet(text, limit):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    starts = [match.start() for match in _DATED_NOTE_RE.finditer(text)]
+    if not starts:
+        return _tail_snippet(text, limit)
+    start = starts[-1]
+    for pos in reversed(starts[:-1]):
+        candidate = text[pos:].strip()
+        if len(candidate) > limit:
+            break
+        start = pos
+    candidate = text[start:].strip()
+    if len(candidate) <= limit:
+        return candidate
+    return _tail_snippet(candidate, limit)
 
 
 def _maybe_strip_code_fence(text):

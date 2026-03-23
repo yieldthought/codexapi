@@ -241,6 +241,17 @@ Why it exists:
 - Thread ids are not sufficient durable memory. The book is the portable,
   inspectable memory surface.
 
+Suggested shape:
+- A stable header with the agent's purpose, values, original goal, and standing
+  guidance.
+- A dated working-notes section where the agent updates its current plan,
+  active tasks, unexpected developments, wider frame, curiosities, risks, and
+  next move.
+
+Wake behavior:
+- The wake prompt should preserve the stable header and the latest notes, rather
+  than repeatedly truncating from the top of the file and hiding recent state.
+
 ### `agents/<agent_id>/commands/new/`
 
 Purpose:

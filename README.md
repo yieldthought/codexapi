@@ -243,7 +243,9 @@ for tests. `CODEXAPI_HOSTNAME` is useful when cron, shells, sandboxes, or test
 wrappers report inconsistent hostnames for the same machine.
 
 `codexapi agent show` also prints the resolved `AGENTBOOK.md` path so you can
-jump directly to the durable working memory file.
+jump directly to the durable working memory file. New agents seed the book with
+a purpose/value header plus the original goal and standing guidance, and wakes
+see that stable header together with the latest working notes.
 `codexapi agent status` reads the latest turn from the agent's rollout log and
 shows recent commentary plus the final visible output. Pass `--actions` to
 include the tool-action summary. If a wake is still in progress, it shows the

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codexapi import __version__
 from codexapi.agents import (
+    _build_wake_prompt,
     _codex_rollout_usage,
     _tick_lock_path,
     _try_lock,
@@ -46,6 +47,7 @@ from codexapi.cli import (
     _print_managed_agent_status,
     main as cli_main,
 )
+from codexapi.lead import _leadbook_block
 
 
 @contextmanager
@@ -120,6 +122,10 @@ class AgentsTests(unittest.TestCase):
             book = read_agentbook(agent["id"])
             self.assertTrue(book["path"].endswith("/AGENTBOOK.md"))
             self.assertIn("# Agentbook", book["text"])
+            self.assertIn("## Purpose", book["text"])
+            self.assertIn("## Values", book["text"])
+            self.assertIn("## Original Goal", book["text"])
+            self.assertIn("Keep notes.", book["text"])
 
             output = io.StringIO()
             with redirect_stdout(output):
@@ -127,6 +133,134 @@ class AgentsTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Agentbook:", text)
             self.assertIn("# Agentbook", text)
+
+    def test_build_wake_prompt_shows_agentbook_header_and_latest_notes(self):
+        with _temp_home() as home:
+            agent = start_agent("Watch for the real issue.", hostname="host-a")
+            agent_dir = home / "agents" / agent["id"]
+            book_path = agent_dir / "AGENTBOOK.md"
+            book_path.write_text(
+                "\n".join(
+                    [
+                        "# Agentbook",
+                        "",
+                        "## Purpose",
+                        "- We are here to achieve the goal, not to appear to make progress.",
+                        "",
+                        "## Values",
+                        "- Hold the whole.",
+                        "- Seek the real shape.",
+                        "",
+                        "## Original Goal",
+                        "```text",
+                        "Watch for the real issue.",
+                        "```",
+                        "",
+                        "## Standing Guidance",
+                        "- Prefer the truer explanation to the tidier one.",
+                        "",
+                        "## Working Notes",
+                        "",
+                        "### 2026-03-23 08:00 UTC",
+                        "- OLD " + ("alpha " * 500),
+                        "",
+                        "### 2026-03-23 09:00 UTC",
+                        "- NEW " + ("omega " * 120),
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            meta = json.loads((agent_dir / "meta.json").read_text(encoding="utf-8"))
+            state = json.loads((agent_dir / "state.json").read_text(encoding="utf-8"))
+            session = json.loads((agent_dir / "hosts" / "host-a" / "session.json").read_text(encoding="utf-8"))
+            state["last_success_at"] = "2026-03-23T08:30:00Z"
+            state["activity"] = "Watching"
+            state["update"] = "Still narrowing the field."
+            session["thread_id"] = "thread-123"
+            prompt = _build_wake_prompt(
+                meta,
+                state,
+                session,
+                datetime(2026, 3, 23, 9, 30, tzinfo=timezone.utc),
+                [],
+                agent_dir,
+            )
+            self.assertIn("Agentbook (header + latest notes):", prompt)
+            self.assertIn("## Purpose", prompt)
+            self.assertIn("Hold the whole.", prompt)
+            self.assertIn("Watch for the real issue.", prompt)
+            self.assertIn("NEW omega", prompt)
+            self.assertIn("Previous status: Watching", prompt)
+            self.assertIn("Previous update: Still narrowing the field.", prompt)
+            self.assertIn("[... older notes omitted ...]", prompt)
+            self.assertNotIn("Original instructions:", prompt)
+            self.assertNotIn("OLD alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha", prompt)
+
+    def test_build_wake_prompt_repairs_legacy_agentbook_before_wake(self):
+        with _temp_home() as home:
+            agent = start_agent("Keep the true goal in view.", hostname="host-a")
+            agent_dir = home / "agents" / agent["id"]
+            book_path = agent_dir / "AGENTBOOK.md"
+            book_path.write_text(
+                "\n".join(
+                    [
+                        "# Agentbook",
+                        "",
+                        "Use this file as the durable working memory for the agent.",
+                        "Append dated notes as work progresses.",
+                        "Keep entries short and concrete.",
+                        "",
+                        "## 2026-03-23 08:00 UTC",
+                        "- Legacy note about the real issue.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            meta = json.loads((agent_dir / "meta.json").read_text(encoding="utf-8"))
+            state = json.loads((agent_dir / "state.json").read_text(encoding="utf-8"))
+            session = json.loads((agent_dir / "hosts" / "host-a" / "session.json").read_text(encoding="utf-8"))
+            state["last_success_at"] = "2026-03-23T08:30:00Z"
+            session["thread_id"] = "thread-legacy"
+            now = datetime(2026, 3, 23, 9, 30, tzinfo=timezone.utc)
+            prompt = _build_wake_prompt(meta, state, session, now, [], agent_dir)
+            repaired = book_path.read_text(encoding="utf-8")
+            self.assertIn("## Purpose", repaired)
+            self.assertIn("## Values", repaired)
+            self.assertIn("## Original Goal", repaired)
+            self.assertIn("Keep the true goal in view.", repaired)
+            self.assertIn("### 2026-03-23 09:30 UTC", repaired)
+            self.assertIn("The durable agentbook header was restored automatically on wake", repaired)
+            self.assertIn("Legacy note about the real issue.", repaired)
+            self.assertIn("## Purpose", prompt)
+            self.assertIn("Keep the true goal in view.", prompt)
+            self.assertNotIn("Original instructions:", prompt)
+
+    def test_leadbook_block_shows_header_and_latest_notes(self):
+        leadbook = "\n".join(
+            [
+                "# Leadbook — Studio Notes",
+                "",
+                "Aim:",
+                "- Move the true work forward.",
+                "",
+                "Signals:",
+                "- Treat oddities as clues.",
+                "",
+                "## 2026-03-23 08:00",
+                "- OLD " + ("alpha " * 350),
+                "",
+                "## 2026-03-23 09:00",
+                "- NEW " + ("omega " * 80),
+            ]
+        )
+        block = _leadbook_block("/tmp/LEADBOOK.md", leadbook)
+        self.assertIn("Leadbook (header + latest notes):", block)
+        self.assertIn("Aim:", block)
+        self.assertIn("Signals:", block)
+        self.assertIn("NEW omega", block)
+        self.assertIn("[... older notes omitted ...]", block)
+        self.assertNotIn("OLD alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha", block)
 
     def test_delete_agent_removes_done_agent(self):
         def fake_runner(meta, session, prompt):

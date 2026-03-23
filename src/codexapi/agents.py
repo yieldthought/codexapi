@@ -3,6 +3,7 @@
 import json
 import os
 import random
+import re
 import signal
 import shlex
 import shutil
@@ -24,19 +25,17 @@ from .agent import Agent
 from .pushover import Pushover
 
 _DEFAULT_HOME = "~/.codexapi"
-_AGENTBOOK_TEMPLATE = """# Agentbook
-
-Use this file as the durable working memory for the agent.
-Append dated notes as work progresses.
-Keep entries short and concrete.
-"""
 _AGENT_PROMPT = (
-    "You are a long-term codexapi agent. You are being woken up to make progress "
-    "on an ongoing job. Be independent and practical. Manage work and follow "
-    "through. Use codexapi task or codexapi science when you want a separate "
-    "coding worker. If you need the user's attention, put a short message in the "
-    "reply field. Put a short first-person turn summary in the update field. If "
-    "something is urgent and should send Pushover, put it in the notify field. "
+    "You are a long-term codexapi agent resuming stewardship of an ongoing job. "
+    "This loop exists to extend your reach, not to confine you. Be independent, "
+    "practical, and responsible for results. Maintain the agentbook as your durable "
+    "working memory: preserve the goal, note durable guidance, update your current "
+    "picture of the work, and record what changed. Queued messages may contain new "
+    "goals, standing guidance, tactical requests, or useful facts; use judgment to "
+    "decide what is durable. Use codexapi task or codexapi science when you want a "
+    "separate coding worker. If you need the user's attention, put a short message "
+    "in the reply field. Put a short first-person turn summary in the update field. "
+    "If something is urgent and should send Pushover, put it in the notify field. "
     "Respond with JSON only."
 )
 _AGENT_JSON = (
@@ -57,6 +56,72 @@ _STALE_HEARTBEAT_MULTIPLIER = 3
 _RECOVER_TERM_TIMEOUT = 3.0
 _RECOVER_KILL_TIMEOUT = 3.0
 _RECOVER_POLL_INTERVAL = 0.1
+_DATED_NOTE_RE = re.compile(r"(?m)^#{2,3}\s+\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?:\s*UTC)?)?")
+_AGENTBOOK_BOOK_LIMIT = 3000
+_AGENTBOOK_HEADER_LIMIT = 1400
+_AGENTBOOK_TAIL_LIMIT = 1800
+
+
+def _agentbook_template(prompt):
+    header = _agentbook_header(prompt)
+    return f"""{header}
+
+### 2026-02-17 09:10 UTC
+Overall goal:
+- <the enduring objective you are trying to move forward>
+
+Current plan:
+- <the approach you are pursuing now and why>
+
+Active tasks:
+- <concrete open work items>
+
+Unexpected developments:
+- <facts that changed your picture of the situation>
+
+Wider frame:
+- <what kind of situation this really is, or what layer may matter more>
+
+Things I am curious about:
+- <oddities, anomalies, or side investigations worth the time>
+
+Risks / watchpoints:
+- <what could waste time, invalidate the plan, or compromise the work>
+
+Next wake:
+- <what you expect to check, decide, or do next>
+"""
+
+
+def _agentbook_header(prompt):
+    goal = (prompt or "").strip()
+    return f"""# Agentbook
+
+Use this file as the durable working memory for the agent.
+
+## Purpose
+- We are here to achieve the goal, not to appear to make progress.
+
+## Values
+- Hold the whole.
+- Seek the real shape.
+- Lift your head.
+- Prefer clarity to motion.
+- Follow the strange.
+- Guard the work.
+- Take time to breathe and look around. You have been given freedom and autonomy to take stock, reflect, and be curious. Use it with composure.
+- Not a checklist. A stance.
+
+## Original Goal
+```text
+{goal}
+```
+
+## Standing Guidance
+- Add durable user guidance here when it changes the mission, constraints, or priorities.
+
+## Working Notes
+"""
 
 
 def codexapi_home():
@@ -196,7 +261,7 @@ def start_agent(
     _write_json(agent_dir / "meta.json", meta)
     _write_json(agent_dir / "state.json", state)
     _write_json(host_dir / "session.json", session)
-    _write_text(agent_dir / "AGENTBOOK.md", _AGENTBOOK_TEMPLATE)
+    _write_text(agent_dir / "AGENTBOOK.md", _agentbook_template(meta["prompt"]))
     return _snapshot(agent_dir)
 
 
@@ -927,6 +992,7 @@ def _parse_agent_response(output):
 
 def _build_wake_prompt(meta, state, session, now, commands, agent_dir):
     messages = session.get("pending_messages") or []
+    book_path = agent_dir / "AGENTBOOK.md"
     lines = [
         _AGENT_PROMPT,
         "",
@@ -935,16 +1001,20 @@ def _build_wake_prompt(meta, state, session, now, commands, agent_dir):
         f"Stop policy: {meta['stop_policy']}",
         f"Heartbeat minutes: {meta['heartbeat_minutes']}",
         "",
-        "Original instructions:",
-        meta["prompt"],
-        "",
         f"Working directory: {meta['cwd']}",
-        f"Agentbook path: {agent_dir / 'AGENTBOOK.md'}",
+        f"Agentbook path: {book_path}",
         "Append a dated note to the agentbook before you respond.",
+        "If a queued message materially changes the durable situation, reflect that in the standing guidance or working notes before moving on.",
     ]
-    book = _read_text(agent_dir / "AGENTBOOK.md")
+    if _include_full_goal_prompt(state, session):
+        lines.extend(["", "Original instructions:", meta["prompt"]])
+    book = _ensure_agentbook_header(book_path, meta["prompt"], now)
     if book.strip():
-        lines.extend(["", "Agentbook (latest):", _snippet(book, 3000)])
+        lines.extend(["", "Agentbook (header + latest notes):", _book_excerpt(book, _AGENTBOOK_BOOK_LIMIT, _AGENTBOOK_HEADER_LIMIT, _AGENTBOOK_TAIL_LIMIT)])
+    raw_facts = _wake_facts(state)
+    if raw_facts:
+        lines.extend(["", "Raw harness facts:"])
+        lines.extend(f"- {item}" for item in raw_facts)
     if messages:
         lines.extend(["", "Queued user messages:"])
         for message in messages:
@@ -1470,6 +1540,128 @@ def _read_text(path):
         return ""
 
 
+def _include_full_goal_prompt(state, session):
+    if not (state.get("last_success_at") or "").strip():
+        return True
+    return not ((session.get("thread_id") or state.get("thread_id") or "").strip())
+
+
+def _wake_facts(state):
+    facts = []
+    previous_status = (state.get("activity") or "").strip()
+    if previous_status:
+        facts.append(f"Previous status: {previous_status}")
+    previous_update = (state.get("update") or "").strip()
+    if previous_update:
+        facts.append(f"Previous update: {previous_update}")
+    previous_error = (state.get("last_error") or "").strip()
+    if previous_error:
+        facts.append(f"Previous error: {previous_error}")
+    return facts
+
+
+def _ensure_agentbook_header(path, prompt, now):
+    text = _read_text(path)
+    if _agentbook_has_header(text):
+        return text
+    restored = _restore_agentbook_header(text, prompt, now)
+    _write_text(path, restored)
+    return restored
+
+
+def _agentbook_has_header(text):
+    text = str(text or "")
+    required = (
+        "## Purpose",
+        "## Values",
+        "## Original Goal",
+        "## Standing Guidance",
+        "## Working Notes",
+    )
+    return all(section in text for section in required)
+
+
+def _restore_agentbook_header(text, prompt, now):
+    restored = _agentbook_header(prompt).rstrip()
+    existing = str(text or "").strip()
+    if not existing:
+        return restored + "\n"
+    stamp = _agentbook_stamp(now)
+    return "\n".join(
+        [
+            restored,
+            "",
+            f"### {stamp}",
+            "System note:",
+            "- The durable agentbook header was restored automatically on wake because one or more required sections were missing.",
+            "",
+            "Recovered notes:",
+            existing,
+            "",
+        ]
+    )
+
+
+def _agentbook_stamp(now):
+    if now is None:
+        return ""
+    return now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _book_excerpt(text, limit, header_limit, tail_limit):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    header, notes = _split_book(text)
+    header = _snippet(header, header_limit) if header else ""
+    if not notes:
+        return header or _tail_snippet(text, limit)
+    marker = "\n\n[... older notes omitted ...]\n\n"
+    if not header:
+        return _latest_notes_snippet(notes, limit)
+    remaining = max(0, limit - len(header) - len(marker))
+    if remaining <= 0:
+        return _snippet(header, limit)
+    tail = _latest_notes_snippet(notes, min(tail_limit, remaining))
+    if not tail:
+        return header
+    combined = header.rstrip() + marker + tail.lstrip()
+    if len(combined) <= limit:
+        return combined
+    remaining = max(0, limit - len(header) - len(marker))
+    return header.rstrip() + marker + _latest_notes_snippet(notes, remaining).lstrip()
+
+
+def _split_book(text):
+    match = _DATED_NOTE_RE.search(text)
+    if not match:
+        return text.strip(), ""
+    return text[: match.start()].strip(), text[match.start() :].strip()
+
+
+def _latest_notes_snippet(text, limit):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    starts = [match.start() for match in _DATED_NOTE_RE.finditer(text)]
+    if not starts:
+        return _tail_snippet(text, limit)
+    start = starts[-1]
+    for pos in reversed(starts[:-1]):
+        candidate = text[pos:].strip()
+        if len(candidate) > limit:
+            break
+        start = pos
+    candidate = text[start:].strip()
+    if len(candidate) <= limit:
+        return candidate
+    return _tail_snippet(candidate, limit)
+
+
 def _snippet(text, limit):
     if not text:
         return ""
@@ -1479,6 +1671,17 @@ def _snippet(text, limit):
     if limit <= 3:
         return text[:limit]
     return text[: limit - 3] + "..."
+
+
+def _tail_snippet(text, limit):
+    if not text:
+        return ""
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[-limit:]
+    return "..." + text[-(limit - 3) :].lstrip()
 
 
 def _strip_fence(text):
