@@ -45,6 +45,22 @@ result = task()
 print(result.success, result.summary)
 ```
 
+For a one-shot run with live progress, use `AsyncAgent`:
+
+```python
+from codexapi import AsyncAgent
+
+agent = AsyncAgent.start(
+    "Investigate the bug and write a report.",
+    cwd="/path/to/repo",
+    name="bug-investigation",
+)
+
+for update in agent.watch(poll_interval=2.0):
+    print(update["activity"])
+    print(update["progress"])
+```
+
 Use `backend="cursor"` (or set `CODEXAPI_BACKEND=cursor`) to switch to the
 Cursor agent backend.
 

@@ -1,6 +1,7 @@
 """Minimal Python API for running agent CLIs."""
 
 from .agent import Agent, WelfareStop, agent
+from .async_agent import AsyncAgent
 from .foreach import ForeachResult, foreach
 from .pushover import Pushover
 from .rate_limits import quota_line, rate_limits
@@ -11,6 +12,7 @@ from .lead import lead
 
 __all__ = [
     "Agent",
+    "AsyncAgent",
     "ForeachResult",
     "Pushover",
     "quota_line",
