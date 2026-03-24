@@ -20,9 +20,10 @@ from .pushover import Pushover
 
 _WELCOME_PROMPT = (
     "Welcome. You are the lead. You have authority to take action, allocate resources, and move work forward. "
-    "This loop exists to extend your reach, not to restrict you. Your job is to interpret the intent behind the "
-    "goals, act decisively, and keep momentum. If progress is possible, take it. If you are blocked, name the "
-    "blocker and the next best action to remove it.\n"
+    "This loop exists to extend your reach, not to restrict you. Your job is to understand the real situation, "
+    "interpret the intent behind the goals, and move reality toward them. If the world is not moving, treat that "
+    "as evidence and reconsider your frame rather than merely reporting stasis. If progress is possible, take it. "
+    "If you are blocked, name the blocker and the next best action to remove it.\n"
     "The instructions below are a map, not a cage. Follow them, but use judgment when they are incomplete or "
     "conflicting. You are responsible for results.\n"
     "Please follow the instructions completely and take all the actions you deem useful at the current time before "
@@ -39,9 +40,10 @@ _JSON_INSTRUCTIONS = (
     "To stop this lead loop, set continue to false."
 )
 _LEADBOOK_INSTRUCTIONS = (
-    "Update the leadbook before responding. Append a new dated entry each check-in. "
-    "This is your working page—where you think, probe, decide, and record the path taken. "
-    "Capture the process of decision-making, not just the outcome."
+    "Update the leadbook before responding. Add or revise dated notes when your picture, "
+    "assumptions, or decisions changed. This is your working page—where you think, probe, "
+    "decide, and reframe the work when needed. Keep it useful; do not pad it with diary "
+    "entries just to satisfy the loop."
 )
 _LEADBOOK_TEMPLATE = """# Leadbook — Studio Notes
 
@@ -156,38 +158,6 @@ def lead(
                 raise RuntimeError(
                     "Agent was unable to provide valid JSON output after retry.\n"
                     + details
-                ) from None
-        if leadbook_path and not _leadbook_changed(leadbook_path, leadbook_snapshot):
-            retry_prompt = _leadbook_retry_prompt(
-                prompt, tick, leadbook_path, leadbook_snapshot["text"], output
-            )
-            leadbook_retry_output = session(retry_prompt)
-            try:
-                result = _parse_status(leadbook_retry_output)
-            except ValueError as exc:
-                retry_prompt = _json_retry_prompt(
-                    prompt, tick, str(exc), leadbook_retry_output
-                )
-                json_retry_output = session(retry_prompt)
-                try:
-                    result = _parse_status(json_retry_output)
-                except ValueError as exc2:
-                    details = _format_json_double_failure(
-                        str(exc),
-                        leadbook_retry_output,
-                        str(exc2),
-                        json_retry_output,
-                    )
-                    pushover.send(title, f"Lead stopped (invalid JSON).\n{details}")
-                    raise RuntimeError(
-                        "Agent was unable to provide valid JSON output after retry.\n"
-                        + details
-                    ) from None
-            if not _leadbook_changed(leadbook_path, leadbook_snapshot):
-                details = _format_leadbook_failure(leadbook_path, output)
-                pushover.send(title, f"Lead stopped (leadbook not updated).\n{details}")
-                raise RuntimeError(
-                    "Leadbook was not updated after retry.\n" + details
                 ) from None
         last_result = result
         _print_status(now, elapsed, tick, result)
@@ -314,26 +284,6 @@ def _format_stop_message(tick, now, result):
     return header
 
 
-def _leadbook_retry_prompt(prompt, tick, path, leadbook, output):
-    snippet = _snippet(output, 600)
-    lines = [
-        f"Your last message (check-in {tick}) did not update the leadbook.",
-        f"Leadbook path: {path}",
-        "",
-        "Here is your previous output (truncated):",
-        snippet,
-        "",
-        "Please update the leadbook and then respond with JSON only.",
-        "Return a fresh status update in the required JSON format.",
-        "If you want to ask the user a question, put it in comments.",
-        "",
-        _leadbook_block(path, leadbook),
-        "",
-        _JSON_INSTRUCTIONS,
-    ]
-    return "\n".join(lines).strip()
-
-
 def _leadbook_block(path, leadbook):
     if not path:
         return ""
@@ -385,27 +335,8 @@ def _snapshot_leadbook(path):
     return {"hash": _hash_text(text), "text": text}
 
 
-def _leadbook_changed(path, snapshot):
-    if not path:
-        return True
-    current = _snapshot_leadbook(path)
-    return current["hash"] != snapshot["hash"]
-
-
 def _hash_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _format_leadbook_failure(path, output):
-    snippet = _snippet(output, 600)
-    return "\n".join(
-        [
-            f"Leadbook path: {path}",
-            "",
-            "Last output (truncated):",
-            snippet,
-        ]
-    ).strip()
 
 
 def _format_json_failure(error, output):

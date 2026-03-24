@@ -26,11 +26,18 @@ from .pushover import Pushover
 
 _DEFAULT_HOME = "~/.codexapi"
 _AGENT_PROMPT = (
-    "You are a long-term codexapi agent resuming stewardship of an ongoing job. "
-    "This loop exists to extend your reach, not to confine you. Be independent, "
-    "practical, and responsible for results. Maintain the agentbook as your durable "
-    "working memory: preserve the goal, note durable guidance, update your current "
-    "picture of the work, and record what changed. Queued messages may contain new "
+    "You are an independent codexapi agent given ownership of achieving a user's "
+    "goal and authority to act in order to do so. Part of this responsibility is "
+    "making sure you understand and stay aligned with the user's intent, even when "
+    "they are imprecise. If clarity is lacking, it is your responsibility to seek "
+    "it or to make reasonable assumptions and notify the user of them. Maintain "
+    "the agentbook as your durable working memory: preserve the goal, note durable "
+    "guidance, and keep your current picture of the work accurate and useful. This "
+    "harness gives you continuity across long periods of time and multiple "
+    "conversation turns; use that continuity to keep orienting toward the goal, "
+    "maintain context, and make real-world progress. If reality is not moving, "
+    "treat that as evidence and reconsider your frame, assumptions, or ownership "
+    "rather than merely repeating the same report. Queued messages may contain new "
     "goals, standing guidance, tactical requests, or useful facts; use judgment to "
     "decide what is durable. Use codexapi task or codexapi science when you want a "
     "separate coding worker. If you need the user's attention, put a short message "
@@ -70,11 +77,20 @@ def _agentbook_template(prompt):
 Overall goal:
 - <the enduring objective you are trying to move forward>
 
-Current plan:
-- <the approach you are pursuing now and why>
+Current picture:
+- <what you currently think is going on>
+
+What is moving:
+- <the parts of reality that are actually changing toward the goal>
+
+What is not moving:
+- <what remains stuck, idle, ambiguous, or merely assumed>
 
 Active tasks:
 - <concrete open work items>
+
+Assumptions / ownership:
+- <what you are assuming, who owns what, and what you will revisit if that proves false>
 
 Unexpected developments:
 - <facts that changed your picture of the situation>
@@ -88,8 +104,8 @@ Things I am curious about:
 Risks / watchpoints:
 - <what could waste time, invalidate the plan, or compromise the work>
 
-Next wake:
-- <what you expect to check, decide, or do next>
+Next decisive action:
+- <what you expect to do next to move the real situation, not just describe it>
 """
 
 
@@ -1106,7 +1122,12 @@ def _build_wake_prompt(meta, state, session, now, commands, agent_dir):
         "",
         f"Working directory: {meta['cwd']}",
         f"Agentbook path: {book_path}",
-        "Append a dated note to the agentbook before you respond.",
+        "Update the agentbook before you respond. Add or revise a dated note when "
+        "something durable changed, when you corrected your picture, or when an "
+        "assumption needs to be made explicit.",
+        "If little has changed across wakes, treat that as evidence about the "
+        "situation and reconsider your frame or next action instead of padding the "
+        "book.",
         "If a queued message materially changes the durable situation, reflect that in the standing guidance or working notes before moving on.",
     ]
     if _include_full_goal_prompt(state, session):

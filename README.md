@@ -151,7 +151,7 @@ stops.
 
 Lead mode also uses a leadbook file as the agent's working page. By default this
 is `LEADBOOK.md` in the working directory. The leadbook content is injected into
-each check-in prompt and must be updated before the agent responds. Use
+each check-in prompt so the agent can keep its working picture current. Use
 `--leadbook PATH` to point at a different file, or `--no-leadbook` to disable.
 Use `-f/--prompt-file` to read the prompt from a file.
 If the leadbook does not exist, lead creates it with a template.
