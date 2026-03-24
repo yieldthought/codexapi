@@ -21,7 +21,7 @@ from pathlib import Path
 
 import fcntl
 
-from .agent import Agent
+from .agent import Agent, _ensure_backend_available, _resolve_backend
 from .pushover import Pushover
 
 _DEFAULT_HOME = "~/.codexapi"
@@ -194,9 +194,14 @@ def start_agent(
         raise ValueError("heartbeat_minutes must be >= 0")
 
     home = _resolve_home(home)
-    host = hostname or current_hostname()
+    local_host = current_hostname()
+    host = hostname or local_host
     now = now or utc_now()
     _ensure_home(home)
+    backend_name = _resolve_backend(backend)
+    session_env = _capture_env()
+    if host == local_host:
+        _ensure_backend_available(backend_name, session_env)
 
     agent_id = uuid.uuid4().hex
     agent_dir = _agent_dir(home, agent_id)
@@ -216,11 +221,11 @@ def start_agent(
     session = {
         "thread_id": "",
         "rollout_path": "",
-        "backend": backend or os.environ.get("CODEXAPI_BACKEND", "codex"),
+        "backend": backend_name,
         "yolo": bool(yolo),
         "flags": flags or "",
         "cwd": cwd,
-        "env": _capture_env(),
+        "env": session_env,
         "pending_messages": [],
     }
     agent_name = _choose_name(home, prompt, name)
@@ -673,15 +678,45 @@ def install_cron(home=None, hostname=None, python_executable=None, path_value=No
     }
 
 
-def cron_installed(home=None, hostname=None):
-    """Return whether this home and host have an installed scheduler hook."""
+def cron_status(home=None, hostname=None):
+    """Return whether this home and host have a runnable scheduler hook."""
     home = _resolve_home(home)
     host = hostname or current_hostname()
     tag = _cron_tag(home, host)
     wrapper = home / "bin" / "agent-tick"
     crontab = _read_crontab()
-    installed = any(raw.strip().endswith(f"# {tag}") for raw in crontab.splitlines())
-    return installed and wrapper.exists()
+    configured = any(raw.strip().endswith(f"# {tag}") for raw in crontab.splitlines())
+    status = {
+        "hostname": host,
+        "home": str(home),
+        "wrapper": str(wrapper),
+        "configured": configured,
+        "healthy": False,
+        "reason": "",
+    }
+    if not configured:
+        status["reason"] = "No scheduler entry is installed for this CODEXAPI_HOME."
+        return status
+    if not wrapper.exists():
+        status["reason"] = "Scheduler wrapper is missing."
+        return status
+    if not wrapper.is_file():
+        status["reason"] = "Scheduler wrapper path is not a file."
+        return status
+    if not os.access(wrapper, os.X_OK):
+        status["reason"] = "Scheduler wrapper is not executable."
+        return status
+    reason = _check_tick_wrapper(wrapper)
+    if reason:
+        status["reason"] = reason
+        return status
+    status["healthy"] = True
+    return status
+
+
+def cron_installed(home=None, hostname=None):
+    """Return whether this home and host have an installed scheduler hook."""
+    return cron_status(home, hostname)["healthy"]
 
 
 def uninstall_cron(home=None, hostname=None):
@@ -755,6 +790,74 @@ def render_cron_line(home=None, hostname=None):
     host = hostname or current_hostname()
     wrapper = home / "bin" / "agent-tick"
     return f"* * * * * {shlex.quote(str(wrapper))} >/dev/null 2>&1  # { _cron_tag(home, host) }"
+
+
+def _check_tick_wrapper(wrapper):
+    try:
+        text = wrapper.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"Could not read scheduler wrapper: {_single_line(str(exc)) or exc.__class__.__name__}."
+    env, env_error = _wrapper_env(text)
+    if env_error:
+        return env_error
+    command = _wrapper_exec_command(text)
+    if not command:
+        return "Scheduler wrapper is missing its exec command."
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return f"Could not parse scheduler wrapper command: {_single_line(str(exc)) or exc.__class__.__name__}."
+    if not argv:
+        return "Scheduler wrapper exec command is empty."
+    if len(argv) >= 3 and argv[1] == "-m" and argv[2] == "codexapi":
+        check = [argv[0], "-c", "import codexapi"]
+        label = f"Wrapper python {argv[0]!r} cannot import codexapi."
+    else:
+        check = [argv[0], "--version"]
+        label = f"Wrapper command {argv[0]!r} is not runnable."
+    try:
+        result = subprocess.run(
+            check,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+    except OSError as exc:
+        return f"{label} {_single_line(str(exc)) or exc.__class__.__name__}"
+    except subprocess.TimeoutExpired:
+        return f"{label} Timed out while checking it."
+    if result.returncode == 0:
+        return ""
+    detail = _single_line((result.stderr or result.stdout or "").strip())
+    if detail:
+        return f"{label} {detail}"
+    return label
+
+
+def _wrapper_env(text):
+    env = dict(os.environ)
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("export "):
+            continue
+        key, sep, raw_value = line[7:].partition("=")
+        if not sep:
+            continue
+        try:
+            parts = shlex.split(raw_value)
+        except ValueError as exc:
+            return {}, f"Could not parse scheduler wrapper env: {_single_line(str(exc)) or exc.__class__.__name__}."
+        env[key] = parts[0] if parts else ""
+    return env, ""
+
+
+def _wrapper_exec_command(text):
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("exec "):
+            return line[5:].strip()
+    return ""
 
 
 def _tick_agent(agent_dir, now, runner):

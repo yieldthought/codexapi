@@ -18,7 +18,7 @@ from .agent import Agent, agent
 from .agents import (
     codexapi_home,
     control_agent,
-    cron_installed as agent_cron_installed,
+    cron_status as agent_cron_status,
     current_hostname,
     delete_agent as delete_managed_agent,
     install_cron as install_agent_cron,
@@ -263,7 +263,7 @@ def _agent_install_cron_command():
 
 def _warn_agent_scheduler_missing():
     try:
-        installed = agent_cron_installed()
+        status = agent_cron_status()
     except Exception as exc:
         print(
             "Warning: could not verify whether the codexapi agent scheduler hook is installed.",
@@ -272,7 +272,16 @@ def _warn_agent_scheduler_missing():
         print(f"Reason: {exc}", file=sys.stderr)
         print(f"Install it with: {_agent_install_cron_command()}", file=sys.stderr)
         return
-    if installed:
+    if status["healthy"]:
+        return
+    if status["configured"]:
+        print(
+            "Warning: the codexapi agent scheduler hook is installed but not runnable for this CODEXAPI_HOME.",
+            file=sys.stderr,
+        )
+        if status["reason"]:
+            print(f"Reason: {status['reason']}", file=sys.stderr)
+        print(f"Reinstall it with: {_agent_install_cron_command()}", file=sys.stderr)
         return
     print(
         "Warning: no codexapi agent scheduler hook is installed for this CODEXAPI_HOME. "
@@ -2016,18 +2025,21 @@ def main(argv=None):
             raise SystemExit(2)
         if args.agent_command == "start":
             prompt = _read_prompt(args.prompt)
-            result = start_managed_agent(
-                prompt,
-                args.cwd,
-                args.name,
-                args.created_by,
-                args.parent,
-                args.stop_policy,
-                args.heartbeat_minutes,
-                args.backend,
-                args.yolo,
-                args.flags,
-            )
+            try:
+                result = start_managed_agent(
+                    prompt,
+                    args.cwd,
+                    args.name,
+                    args.created_by,
+                    args.parent,
+                    args.stop_policy,
+                    args.heartbeat_minutes,
+                    args.backend,
+                    args.yolo,
+                    args.flags,
+                )
+            except RuntimeError as exc:
+                raise SystemExit(str(exc)) from None
             result["waited"] = bool(args.wait)
             if args.wait:
                 result["nudge"] = nudge_agent(result["id"], wait=True)

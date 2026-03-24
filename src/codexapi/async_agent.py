@@ -13,6 +13,7 @@ import uuid
 from .agent import (
     _CODEX_BIN,
     _CURSOR_BIN,
+    _ensure_backend_available,
     _event_usage,
     _merged_env,
     _normalize_usage,
@@ -90,6 +91,7 @@ class AsyncAgent:
             raise ValueError("prompt must be a non-empty string")
 
         backend = _resolve_backend(backend)
+        _ensure_backend_available(backend, env)
         command = _build_command(backend, cwd, yolo, flags)
         process = subprocess.Popen(
             command,

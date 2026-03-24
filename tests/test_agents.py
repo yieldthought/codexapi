@@ -23,6 +23,8 @@ from codexapi.agents import (
     _remove_cron_line,
     _upsert_cron_line,
     control_agent,
+    cron_installed,
+    cron_status,
     delete_agent,
     format_utc,
     install_cron,
@@ -776,6 +778,31 @@ class AgentsTests(unittest.TestCase):
             self.assertFalse(result["changed"])
             self.assertEqual(writes, [])
 
+    def test_cron_status_reports_broken_wrapper_python(self):
+        with _temp_home() as home:
+            write_tick_wrapper(
+                home=home,
+                python_executable="/tmp/venv/bin/python",
+                path_value="/tmp/venv/bin:/usr/bin",
+                hostname="host-a",
+            )
+            crontab = render_cron_line(home=home, hostname="host-a") + "\n"
+            with patch("codexapi.agents._read_crontab", return_value=crontab):
+                with patch(
+                    "codexapi.agents.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        ["/tmp/venv/bin/python", "-c", "import codexapi"],
+                        1,
+                        stdout="",
+                        stderr="ModuleNotFoundError: No module named 'codexapi'\n",
+                    ),
+                ):
+                    status = cron_status(home=home, hostname="host-a")
+                    self.assertTrue(status["configured"])
+                    self.assertFalse(status["healthy"])
+                    self.assertIn("cannot import codexapi", status["reason"])
+                    self.assertFalse(cron_installed(home=home, hostname="host-a"))
+
     def test_uninstall_cron_removes_only_this_home_entry_and_wrapper(self):
         writes = []
 
@@ -1206,15 +1233,54 @@ class AgentsTests(unittest.TestCase):
         with _temp_home() as home:
             output = io.StringIO()
             errors = io.StringIO()
-            with patch("codexapi.cli.agent_cron_installed", return_value=False):
-                with redirect_stdout(output), redirect_stderr(errors):
-                    cli_main(["agent", "start", "Handle messages."])
+            with patch("codexapi.agents._ensure_backend_available", return_value="/usr/bin/codex"):
+                with patch(
+                    "codexapi.cli.agent_cron_status",
+                    return_value={"configured": False, "healthy": False, "reason": ""},
+                ):
+                    with redirect_stdout(output), redirect_stderr(errors):
+                        cli_main(["agent", "start", "Handle messages."])
             payload = json.loads(output.getvalue())
             self.assertFalse(payload["waited"])
             warning = errors.getvalue()
             self.assertIn("Background agent wakes will not run", warning)
             self.assertIn(str(home), warning)
             self.assertIn("codexapi agent install-cron", warning)
+
+    def test_cli_start_warns_when_scheduler_is_broken(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        with _temp_home():
+            with patch("codexapi.agents._ensure_backend_available", return_value="/usr/bin/codex"):
+                with patch(
+                    "codexapi.cli.agent_cron_status",
+                    return_value={
+                        "configured": True,
+                        "healthy": False,
+                        "reason": "Wrapper python '/tmp/venv/bin/python' cannot import codexapi.",
+                    },
+                ):
+                    with redirect_stdout(output), redirect_stderr(errors):
+                        cli_main(["agent", "start", "Handle messages."])
+        payload = json.loads(output.getvalue())
+        self.assertFalse(payload["waited"])
+        warning = errors.getvalue()
+        self.assertIn("installed but not runnable", warning)
+        self.assertIn("cannot import codexapi", warning)
+        self.assertIn("Reinstall it with", warning)
+
+    def test_cli_start_fails_fast_when_backend_is_missing(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        with _temp_home():
+            with patch(
+                "codexapi.agents._ensure_backend_available",
+                side_effect=RuntimeError("Codex CLI not found: 'codex'."),
+            ):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    with self.assertRaises(SystemExit) as exc:
+                        cli_main(["agent", "start", "Handle messages."])
+        self.assertEqual(str(exc.exception), "Codex CLI not found: 'codex'.")
 
     def test_cli_send_queues_by_default(self):
         with _temp_home():

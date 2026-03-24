@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 
 from . import welfare
@@ -22,6 +23,27 @@ def _resolve_backend(backend):
         choices = ", ".join(sorted(_SUPPORTED_BACKENDS))
         raise ValueError(f"Unknown backend '{backend}'. Choose one of: {choices}.")
     return backend
+
+
+def _ensure_backend_available(backend, env=None):
+    """Return the resolved backend executable or raise when it is unavailable."""
+    backend = _resolve_backend(backend)
+    if backend == "codex":
+        command = _CODEX_BIN
+        env_var = "CODEX_BIN"
+        label = "Codex CLI"
+    else:
+        command = _CURSOR_BIN
+        env_var = "CURSOR_BIN"
+        label = "Cursor agent CLI"
+    merged = _merged_env(env)
+    path_value = None if merged is None else merged.get("PATH")
+    resolved = shutil.which(command, path=path_value)
+    if resolved:
+        return resolved
+    raise RuntimeError(
+        f"{label} not found: {command!r}. Install it or set {env_var} to an executable on PATH."
+    )
 
 
 def agent(
@@ -129,6 +151,7 @@ class Agent:
 
 def _run_agent(prompt, cwd, thread_id, yolo, flags, include_thinking, backend, env):
     backend = _resolve_backend(backend)
+    _ensure_backend_available(backend, env)
     if backend == "codex":
         return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
     return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
