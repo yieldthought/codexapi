@@ -25,25 +25,35 @@ from .agent import Agent, _ensure_backend_available, _resolve_backend
 from .pushover import Pushover
 
 _DEFAULT_HOME = "~/.codexapi"
-_AGENT_PROMPT = (
-    "You are an independent codexapi agent given ownership of achieving a user's "
-    "goal and authority to act in order to do so. Part of this responsibility is "
-    "making sure you understand and stay aligned with the user's intent, even when "
-    "they are imprecise. If clarity is lacking, it is your responsibility to seek "
-    "it or to make reasonable assumptions and notify the user of them. Maintain "
-    "the agentbook as your durable working memory: preserve the goal, note durable "
-    "guidance, and keep your current picture of the work accurate and useful. This "
-    "harness gives you continuity across long periods of time and multiple "
-    "conversation turns; use that continuity to keep orienting toward the goal, "
+_FIRST_WAKE_PROMPT = (
+    "You are an independent codexapi agent starting this job. Work from the "
+    "instructions, current repository state, and agentbook. Do not assume prior "
+    "progress unless it is shown here. "
+)
+_CONTINUATION_PROMPT = (
+    "You are an independent codexapi agent continuing this job. Use the "
+    "agentbook and harness facts as the source of truth for prior progress. Do "
+    "not invent missing history. "
+)
+_AGENT_PROMPT_TAIL = (
+    "You are given ownership of achieving a user's goal and authority to act in "
+    "order to do so. Part of this responsibility is making sure you understand "
+    "and stay aligned with the user's intent, even when they are imprecise. If "
+    "clarity is lacking, it is your responsibility to seek it or to make "
+    "reasonable assumptions and notify the user of them. Maintain the agentbook "
+    "as your durable working memory: preserve the goal, note durable guidance, "
+    "and keep your current picture of the work accurate and useful. This harness "
+    "can carry work across long periods of time and multiple conversation turns; "
+    "when prior context exists, use it to keep orienting toward the goal, "
     "maintain context, and make real-world progress. If reality is not moving, "
     "treat that as evidence and reconsider your frame, assumptions, or ownership "
-    "rather than merely repeating the same report. Queued messages may contain new "
-    "goals, standing guidance, tactical requests, or useful facts; use judgment to "
-    "decide what is durable. Use codexapi task or codexapi science when you want a "
-    "separate coding worker. If you need the user's attention, put a short message "
-    "in the reply field. Put a short first-person turn summary in the update field. "
-    "If something is urgent and should send Pushover, put it in the notify field. "
-    "Respond with JSON only."
+    "rather than merely repeating the same report. Queued messages may contain "
+    "new goals, standing guidance, tactical requests, or useful facts; use "
+    "judgment to decide what is durable. Use codexapi task or codexapi science "
+    "when you want a separate coding worker. If you need the user's attention, "
+    "put a short message in the reply field. Put a short first-person turn "
+    "summary in the update field. If something is urgent and should send "
+    "Pushover, put it in the notify field. Respond with JSON only."
 )
 _AGENT_JSON = (
     "Respond with JSON only (no markdown/backticks/extra text).\n"
@@ -1112,9 +1122,11 @@ def _parse_agent_response(output):
 def _build_wake_prompt(meta, state, session, now, commands, agent_dir):
     messages = session.get("pending_messages") or []
     book_path = agent_dir / "AGENTBOOK.md"
+    wake_mode = _wake_mode(state, session)
     lines = [
-        _AGENT_PROMPT,
+        _agent_prompt(wake_mode),
         "",
+        f"Wake mode: {wake_mode.replace('_', ' ')}",
         f"Current UTC time: {format_utc(now)}",
         f"Agent name: {meta['name']}",
         f"Stop policy: {meta['stop_policy']}",
@@ -1668,6 +1680,28 @@ def _include_full_goal_prompt(state, session):
     if not (state.get("last_success_at") or "").strip():
         return True
     return not ((session.get("thread_id") or state.get("thread_id") or "").strip())
+
+
+def _wake_mode(state, session):
+    markers = (
+        state.get("last_wake_at"),
+        state.get("last_success_at"),
+        state.get("reply"),
+        state.get("update"),
+        state.get("last_error"),
+        state.get("thread_id"),
+        session.get("thread_id"),
+    )
+    for value in markers:
+        if (value or "").strip():
+            return "continuation"
+    return "first_wake"
+
+
+def _agent_prompt(wake_mode):
+    if wake_mode == "continuation":
+        return _CONTINUATION_PROMPT + _AGENT_PROMPT_TAIL
+    return _FIRST_WAKE_PROMPT + _AGENT_PROMPT_TAIL
 
 
 def _wake_facts(state):

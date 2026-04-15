@@ -189,6 +189,7 @@ class AgentsTests(unittest.TestCase):
                 agent_dir,
             )
             self.assertIn("Agentbook (header + latest notes):", prompt)
+            self.assertIn("Wake mode: continuation", prompt)
             self.assertIn("## Purpose", prompt)
             self.assertIn("Hold the whole.", prompt)
             self.assertIn("Watch for the real issue.", prompt)
@@ -196,8 +197,10 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("Previous status: Watching", prompt)
             self.assertIn("Previous update: Still narrowing the field.", prompt)
             self.assertIn("[... older notes omitted ...]", prompt)
+            self.assertIn("You are an independent codexapi agent continuing this job.", prompt)
             self.assertNotIn("Original instructions:", prompt)
             self.assertNotIn("OLD alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha", prompt)
+            self.assertNotIn("resuming stewardship", prompt)
 
     def test_build_wake_prompt_repairs_legacy_agentbook_before_wake(self):
         with _temp_home() as home:
@@ -235,8 +238,32 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("The durable agentbook header was restored automatically on wake", repaired)
             self.assertIn("Legacy note about the real issue.", repaired)
             self.assertIn("## Purpose", prompt)
+            self.assertIn("Wake mode: continuation", prompt)
             self.assertIn("Keep the true goal in view.", prompt)
             self.assertNotIn("Original instructions:", prompt)
+
+    def test_build_wake_prompt_marks_first_wake_without_prior_history(self):
+        with _temp_home() as home:
+            agent = start_agent("Start from what is actually shown.", hostname="host-a")
+            agent_dir = home / "agents" / agent["id"]
+            meta = json.loads((agent_dir / "meta.json").read_text(encoding="utf-8"))
+            state = json.loads((agent_dir / "state.json").read_text(encoding="utf-8"))
+            session = json.loads((agent_dir / "hosts" / "host-a" / "session.json").read_text(encoding="utf-8"))
+
+            prompt = _build_wake_prompt(
+                meta,
+                state,
+                session,
+                datetime(2026, 3, 23, 9, 30, tzinfo=timezone.utc),
+                [],
+                agent_dir,
+            )
+
+            self.assertIn("Wake mode: first wake", prompt)
+            self.assertIn("You are an independent codexapi agent starting this job.", prompt)
+            self.assertIn("Do not assume prior progress unless it is shown here.", prompt)
+            self.assertIn("Original instructions:", prompt)
+            self.assertNotIn("resuming stewardship", prompt)
 
     def test_leadbook_block_shows_header_and_latest_notes(self):
         leadbook = "\n".join(
