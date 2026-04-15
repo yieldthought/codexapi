@@ -106,6 +106,14 @@ _COLUMN_TITLES = {
 _FOREACH_STATUS_MARKERS = {"⏳", "✅", "❌"}
 
 
+def _add_subparser(subparsers, name, help_text, **kwargs):
+    parser_kwargs = dict(kwargs)
+    parser_kwargs["help"] = help_text
+    if help_text is not argparse.SUPPRESS:
+        parser_kwargs.setdefault("description", help_text)
+    return subparsers.add_parser(name, **parser_kwargs)
+
+
 def _read_prompt(prompt):
     if prompt and prompt != "-":
         return prompt
@@ -1446,9 +1454,10 @@ def main(argv=None):
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser(
+    run_parser = _add_subparser(
+        subparsers,
         "run",
-        help="Run an agent prompt.",
+        "Run an agent prompt.",
     )
     run_parser.add_argument(
         "prompt",
@@ -1477,9 +1486,10 @@ def main(argv=None):
         help="Return all agent messages joined together (Codex only).",
     )
 
-    lead_parser = subparsers.add_parser(
+    lead_parser = _add_subparser(
+        subparsers,
         "lead",
-        help="Periodically check in to lead long-running work.",
+        "Periodically check in to lead long-running work.",
     )
     lead_parser.add_argument(
         "minutes",
@@ -1531,15 +1541,17 @@ def main(argv=None):
         help="Print the current thread id to stderr after running.",
     )
 
-    agent_parser = subparsers.add_parser(
+    agent_parser = _add_subparser(
+        subparsers,
         "agent",
-        help="Manage durable long-running agents.",
+        "Manage durable long-running agents.",
     )
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
 
-    agent_start = agent_subparsers.add_parser(
+    agent_start = _add_subparser(
+        agent_subparsers,
         "start",
-        help="Create a durable agent and return immediately unless --wait is set.",
+        "Create a durable agent and return immediately unless --wait is set.",
     )
     agent_start.add_argument(
         "prompt",
@@ -1589,30 +1601,35 @@ def main(argv=None):
         help="Wait for the first local wake to finish instead of just scheduling it.",
     )
 
-    agent_subparsers.add_parser(
+    _add_subparser(
+        agent_subparsers,
         "list",
-        help="List durable agents in this CODEXAPI_HOME.",
+        "List durable agents in this CODEXAPI_HOME.",
     )
-    agent_subparsers.add_parser(
+    _add_subparser(
+        agent_subparsers,
         "whoami",
-        help="Show the effective host and CODEXAPI_HOME for agents.",
+        "Show the effective host and CODEXAPI_HOME for agents.",
     )
 
-    agent_run = agent_subparsers.add_parser(
+    agent_run = _add_subparser(
+        agent_subparsers,
         "run",
-        help=argparse.SUPPRESS,
+        argparse.SUPPRESS,
     )
     agent_run.add_argument("agent_ref", help=argparse.SUPPRESS)
 
-    agent_show = agent_subparsers.add_parser(
+    agent_show = _add_subparser(
+        agent_subparsers,
         "show",
-        help="Show one durable agent.",
+        "Show one durable agent.",
     )
     agent_show.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
 
-    agent_status = agent_subparsers.add_parser(
+    agent_status = _add_subparser(
+        agent_subparsers,
         "status",
-        help="Show the latest rollout turn for one durable agent.",
+        "Show the latest rollout turn for one durable agent.",
     )
     agent_status.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_status.add_argument(
@@ -1623,9 +1640,10 @@ def main(argv=None):
         help="Include verbose tool actions from the latest turn.",
     )
 
-    agent_read = agent_subparsers.add_parser(
+    agent_read = _add_subparser(
+        agent_subparsers,
         "read",
-        help="Read recent visible communication for one agent.",
+        "Read recent visible communication for one agent.",
     )
     agent_read.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_read.add_argument(
@@ -1635,15 +1653,17 @@ def main(argv=None):
         help="Maximum number of items to show (default: 10).",
     )
 
-    agent_book = agent_subparsers.add_parser(
+    agent_book = _add_subparser(
+        agent_subparsers,
         "book",
-        help="Show the current agentbook for one agent.",
+        "Show the current agentbook for one agent.",
     )
     agent_book.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
 
-    agent_send = agent_subparsers.add_parser(
+    agent_send = _add_subparser(
+        agent_subparsers,
         "send",
-        help="Queue a message for an agent and return immediately unless --wait is set.",
+        "Queue a message for an agent and return immediately unless --wait is set.",
     )
     agent_send.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_send.add_argument("message", help="Message to queue.")
@@ -1660,7 +1680,7 @@ def main(argv=None):
         ("resume", "Resume a paused agent and return immediately unless --wait is set."),
         ("cancel", "Cancel an agent."),
     ):
-        subparser = agent_subparsers.add_parser(subcommand, help=help_text)
+        subparser = _add_subparser(agent_subparsers, subcommand, help_text)
         subparser.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
         subparser.add_argument("--author", help="Author label for the command.")
         if subcommand in ("wake", "resume"):
@@ -1670,9 +1690,10 @@ def main(argv=None):
                 help="Wait for a local wake after queueing the command.",
             )
 
-    agent_recover = agent_subparsers.add_parser(
+    agent_recover = _add_subparser(
+        agent_subparsers,
         "recover",
-        help="Terminate a stuck local wake, mark it recoverable, and optionally wait for a fresh wake.",
+        "Terminate a stuck local wake, mark it recoverable, and optionally wait for a fresh wake.",
     )
     agent_recover.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_recover.add_argument(
@@ -1681,9 +1702,10 @@ def main(argv=None):
         help="Wait for a local wake after recovery.",
     )
 
-    agent_set_heartbeat = agent_subparsers.add_parser(
+    agent_set_heartbeat = _add_subparser(
+        agent_subparsers,
         "set-heartbeat",
-        help="Update the heartbeat interval for one durable agent.",
+        "Update the heartbeat interval for one durable agent.",
     )
     agent_set_heartbeat.add_argument(
         "agent_ref",
@@ -1695,9 +1717,10 @@ def main(argv=None):
         help="Heartbeat interval in minutes.",
     )
 
-    agent_delete = agent_subparsers.add_parser(
+    agent_delete = _add_subparser(
+        agent_subparsers,
         "delete",
-        help="Delete one durable agent and its files.",
+        "Delete one durable agent and its files.",
     )
     agent_delete.add_argument("agent_ref", help="Agent id, unique prefix, or name.")
     agent_delete.add_argument(
@@ -1706,27 +1729,32 @@ def main(argv=None):
         help="Delete even when the agent is not terminal or still has children.",
     )
 
-    agent_subparsers.add_parser(
+    _add_subparser(
+        agent_subparsers,
         "tick",
-        help="Process due agents for the current host.",
+        "Process due agents for the current host.",
     )
-    agent_subparsers.add_parser(
+    _add_subparser(
+        agent_subparsers,
         "install-cron",
-        help="Install or update the cron entry for this CODEXAPI_HOME.",
+        "Install or update the cron entry for this CODEXAPI_HOME.",
     )
-    agent_subparsers.add_parser(
+    _add_subparser(
+        agent_subparsers,
         "uninstall-cron",
-        help="Remove the cron entry for this CODEXAPI_HOME.",
+        "Remove the cron entry for this CODEXAPI_HOME.",
     )
 
-    subparsers.add_parser(
+    _add_subparser(
+        subparsers,
         "tick",
-        help="Run one full background tick.",
+        "Run one full background tick.",
     )
 
-    task_parser = subparsers.add_parser(
+    task_parser = _add_subparser(
+        subparsers,
         "task",
-        help="Run a task with verification retries.",
+        "Run a task with verification retries.",
     )
     task_parser.add_argument(
         "-f",
@@ -1806,9 +1834,10 @@ def main(argv=None):
         help="With -p, keep taking tasks and wait when none are available.",
     )
 
-    ralph_parser = subparsers.add_parser(
+    ralph_parser = _add_subparser(
+        subparsers,
         "ralph",
-        help="Run a Ralph loop.",
+        "Run a Ralph loop.",
         epilog=ralph_help,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1864,9 +1893,10 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
-    science_parser = subparsers.add_parser(
+    science_parser = _add_subparser(
+        subparsers,
         "science",
-        help="Run a science-mode Ralph loop.",
+        "Run a science-mode Ralph loop.",
         epilog=science_help,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1929,9 +1959,10 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
-    foreach_parser = subparsers.add_parser(
+    foreach_parser = _add_subparser(
+        subparsers,
         "foreach",
-        help="Run a task file over a list file.",
+        "Run a task file over a list file.",
     )
     foreach_parser.add_argument(
         "list_file",
@@ -1974,18 +2005,20 @@ def main(argv=None):
         help="Additional raw CLI flags to pass to the agent backend (quoted as needed).",
     )
 
-    create_parser = subparsers.add_parser(
+    create_parser = _add_subparser(
+        subparsers,
         "create",
-        help="Create a task file template.",
+        "Create a task file template.",
     )
     create_parser.add_argument(
         "filename",
         help="Filename for the new task file.",
     )
 
-    reset_parser = subparsers.add_parser(
+    reset_parser = _add_subparser(
+        subparsers,
         "reset",
-        help="Reset project tasks back to Ready.",
+        "Reset project tasks back to Ready.",
     )
     reset_parser.add_argument(
         "-p",
@@ -2006,13 +2039,15 @@ def main(argv=None):
         help="Remove any Progress section in the issue body.",
     )
 
-    subparsers.add_parser(
+    _add_subparser(
+        subparsers,
         "top",
-        help="Show running Codex sessions.",
+        "Show running Codex sessions.",
     )
-    subparsers.add_parser(
+    _add_subparser(
+        subparsers,
         "limit",
-        help="Show Codex rate limits.",
+        "Show Codex rate limits.",
     )
 
     args = parser.parse_args(argv)

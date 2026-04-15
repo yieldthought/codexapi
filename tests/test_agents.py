@@ -88,6 +88,30 @@ class AgentsTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(output.getvalue().strip(), f"codexapi {__version__}")
 
+    def test_cli_subcommand_help_shows_one_line_description(self):
+        cases = (
+            (
+                ["task", "--help"],
+                "Run a task with verification retries.",
+            ),
+            (
+                ["agent", "resume", "--help"],
+                "Resume a paused agent and return immediately unless --wait is set.",
+            ),
+            (
+                ["agent", "list", "--help"],
+                "List durable agents in this CODEXAPI_HOME.",
+            ),
+        )
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as exc:
+                        cli_main(argv)
+                self.assertEqual(exc.exception.code, 0)
+                self.assertIn(expected, output.getvalue())
+
     def test_current_hostname_prefers_override(self):
         with patch.dict(os.environ, {"CODEXAPI_HOSTNAME": "stable-host"}, clear=False):
             from codexapi.agents import current_hostname
