@@ -78,6 +78,7 @@ class TaskFile(AutoTask):
         thread_id=None,
         flags=None,
         backend=None,
+        fast=False,
     ):
         task_def = load_task_file(path)
         if max_iterations is None:
@@ -108,6 +109,7 @@ class TaskFile(AutoTask):
                 on_success=rendered["on_success"],
                 on_failure=rendered["on_failure"],
                 backend=backend,
+                fast=fast,
             )
             return
         super().__init__(
@@ -123,4 +125,5 @@ class TaskFile(AutoTask):
             on_success=rendered["on_success"],
             on_failure=rendered["on_failure"],
             backend=backend,
+            fast=fast,
         )

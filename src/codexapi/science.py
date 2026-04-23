@@ -103,6 +103,7 @@ class Science(Ralph):
         fresh=True,
         max_duration_seconds=0,
         backend=None,
+        fast=False,
     ):
         if max_duration_seconds < 0:
             raise ValueError("max_duration_seconds must be >= 0")
@@ -118,6 +119,7 @@ class Science(Ralph):
             completion_promise,
             fresh,
             backend,
+            fast,
         )
         self.include_thinking = True
         self._prompt_a = prompt_a
@@ -132,6 +134,7 @@ class Science(Ralph):
         self._duration_limit_hit = False
         self._last_iteration = 0
         self._backend = backend
+        self._fast = fast
 
     def hook_before_loop(self):
         super().hook_before_loop()
@@ -199,7 +202,7 @@ class Science(Ralph):
     def _extract_and_notify(self, message):
         prompt = _build_metrics_prompt(self._task, message, self._best_metrics)
         try:
-            output = agent(prompt, self.cwd, self.yolo, self.flags, backend=self._backend)
+            output = self._agent(prompt)
         except Exception as exc:
             _warn(f"Metrics extraction failed: {exc}")
             return
@@ -222,13 +225,31 @@ class Science(Ralph):
             ]
         )
         try:
-            title = agent(prompt, self.cwd, self.yolo, self.flags, backend=self._backend)
+            title = self._agent(prompt)
         except Exception:
             title = ""
         title = _single_line(title).strip()
         if not title:
             title = _fallback_title(self._task)
         return title
+
+    def _agent(self, prompt):
+        if self._fast:
+            return agent(
+                prompt,
+                self.cwd,
+                self.yolo,
+                self.flags,
+                backend=self._backend,
+                fast=True,
+            )
+        return agent(
+            prompt,
+            self.cwd,
+            self.yolo,
+            self.flags,
+            backend=self._backend,
+        )
 
     def _mark_duration_stop(self, iteration):
         if self._duration_limit_hit:

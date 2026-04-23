@@ -210,6 +210,7 @@ def start_agent(
     home=None,
     hostname=None,
     now=None,
+    fast=False,
 ):
     """Create a durable agent and return its current snapshot."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -250,6 +251,7 @@ def start_agent(
         "backend": backend_name,
         "yolo": bool(yolo),
         "flags": flags or "",
+        "fast": bool(fast),
         "cwd": cwd,
         "env": session_env,
         "pending_messages": [],
@@ -1053,15 +1055,27 @@ def _run_agent_turn(meta, session, prompt, runner=None):
             raise TypeError("runner must return a dict")
         return outcome
     started = utc_now()
-    worker = Agent(
-        session.get("cwd") or meta.get("cwd"),
-        session.get("yolo", True),
-        session.get("thread_id") or None,
-        session.get("flags") or None,
-        include_thinking=False,
-        backend=session.get("backend") or None,
-        env=_agent_env(meta, session),
-    )
+    if session.get("fast", False):
+        worker = Agent(
+            session.get("cwd") or meta.get("cwd"),
+            session.get("yolo", True),
+            session.get("thread_id") or None,
+            session.get("flags") or None,
+            include_thinking=False,
+            backend=session.get("backend") or None,
+            env=_agent_env(meta, session),
+            fast=True,
+        )
+    else:
+        worker = Agent(
+            session.get("cwd") or meta.get("cwd"),
+            session.get("yolo", True),
+            session.get("thread_id") or None,
+            session.get("flags") or None,
+            include_thinking=False,
+            backend=session.get("backend") or None,
+            env=_agent_env(meta, session),
+        )
     message = worker(prompt)
     usage = worker.last_usage or {}
     rollout_path = ""

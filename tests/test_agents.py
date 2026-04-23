@@ -142,6 +142,18 @@ class AgentsTests(unittest.TestCase):
             second = start_agent("Watch CI failures.", hostname="host-b")
             self.assertNotEqual(first["id"], second["id"])
 
+    def test_start_agent_defaults_to_normal_mode(self):
+        with _temp_home():
+            started = start_agent("Use normal mode.", hostname="host-a")
+            shown = show_agent(started["id"])
+            self.assertFalse(shown["session"]["fast"])
+
+    def test_start_agent_can_enable_fast_mode(self):
+        with _temp_home():
+            started = start_agent("Use fast mode.", hostname="host-a", fast=True)
+            shown = show_agent(started["id"])
+            self.assertTrue(shown["session"]["fast"])
+
     def test_read_agentbook_and_cli_book(self):
         with _temp_home():
             agent = start_agent("Keep notes.", hostname="host-a")
@@ -1297,6 +1309,21 @@ class AgentsTests(unittest.TestCase):
             self.assertIn("Background agent wakes will not run", warning)
             self.assertIn(str(home), warning)
             self.assertIn("codexapi agent install-cron", warning)
+
+    def test_cli_start_can_enable_fast_mode(self):
+        with _temp_home():
+            output = io.StringIO()
+            errors = io.StringIO()
+            with patch("codexapi.agents._ensure_backend_available", return_value="/usr/bin/codex"):
+                with patch(
+                    "codexapi.cli.agent_cron_status",
+                    return_value={"configured": False, "healthy": False, "reason": ""},
+                ):
+                    with redirect_stdout(output), redirect_stderr(errors):
+                        cli_main(["agent", "start", "--fast", "Handle messages."])
+            payload = json.loads(output.getvalue())
+            shown = show_agent(payload["id"])
+            self.assertTrue(shown["session"]["fast"])
 
     def test_cli_start_warns_when_scheduler_is_broken(self):
         output = io.StringIO()

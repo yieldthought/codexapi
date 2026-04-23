@@ -1471,6 +1471,11 @@ def main(argv=None):
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
     )
     run_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
+    )
+    run_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
@@ -1511,6 +1516,11 @@ def main(argv=None):
         "--backend",
         choices=("codex", "cursor"),
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
+    lead_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
     )
     lead_parser.add_argument(
         "--leadbook",
@@ -1584,6 +1594,11 @@ def main(argv=None):
         "--backend",
         choices=("codex", "cursor"),
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
+    agent_start.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
     )
     agent_start.add_argument(
         "--no-yolo",
@@ -1814,6 +1829,11 @@ def main(argv=None):
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
     )
     task_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
+    )
+    task_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
@@ -1883,6 +1903,11 @@ def main(argv=None):
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
     )
     ralph_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
+    )
+    ralph_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
@@ -1949,6 +1974,11 @@ def main(argv=None):
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
     )
     science_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
+    )
+    science_parser.add_argument(
         "--no-yolo",
         action="store_false",
         dest="yolo",
@@ -1993,6 +2023,11 @@ def main(argv=None):
         "--backend",
         choices=("codex", "cursor"),
         help="Agent backend to use (default: CODEXAPI_BACKEND or codex).",
+    )
+    foreach_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use Codex fast mode (Codex backend only; default: normal mode).",
     )
     foreach_parser.add_argument(
         "--no-yolo",
@@ -2072,6 +2107,7 @@ def main(argv=None):
                     args.backend,
                     args.yolo,
                     args.flags,
+                    fast=args.fast,
                 )
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from None
@@ -2215,6 +2251,7 @@ def main(argv=None):
             args.yolo,
             args.flags,
             args.backend,
+            args.fast,
         )
         if result.failed:
             raise SystemExit(1)
@@ -2285,6 +2322,7 @@ def main(argv=None):
                         args.yolo,
                         args.flags,
                         args.backend,
+                        args.fast,
                     )
                 except TakeError as exc:
                     print(str(exc), file=sys.stderr)
@@ -2314,6 +2352,7 @@ def main(argv=None):
                     args.yolo,
                     args.flags,
                     args.backend,
+                    args.fast,
                 )
             except TakeError as exc:
                 raise SystemExit(str(exc)) from None
@@ -2350,6 +2389,7 @@ def main(argv=None):
             thread_id=None,
             flags=args.flags,
             backend=args.backend,
+            fast=args.fast,
         )
         result = task_runner(progress=not args.quiet)
         if not result.success:
@@ -2384,6 +2424,7 @@ def main(argv=None):
             args.completion_promise,
             args.ralph_fresh,
             args.backend,
+            args.fast,
         )()
         return
     if args.command == "science":
@@ -2400,6 +2441,7 @@ def main(argv=None):
             args.ralph_fresh,
             max_duration_seconds,
             args.backend,
+            args.fast,
         )()
         return
     if args.command == "lead":
@@ -2417,6 +2459,7 @@ def main(argv=None):
                 args.flags,
                 leadbook,
                 args.backend,
+                args.fast,
             )
         except KeyboardInterrupt:
             raise SystemExit(130)
@@ -2453,6 +2496,7 @@ def main(argv=None):
                 args.flags,
                 not args.quiet,
                 backend=args.backend,
+                fast=args.fast,
             )
         except TaskFailed as exc:
             exit_code = 1
@@ -2466,6 +2510,7 @@ def main(argv=None):
                 args.flags,
                 include_thinking=args.include_thinking,
                 backend=args.backend,
+                fast=args.fast,
             )
             message = session(prompt)
             if args.print_thread_id:
@@ -2478,6 +2523,7 @@ def main(argv=None):
                 args.flags,
                 args.include_thinking,
                 args.backend,
+                fast=args.fast,
             )
 
     if message is not None:

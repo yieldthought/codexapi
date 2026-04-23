@@ -25,6 +25,7 @@ class Ralph:
         completion_promise=None,
         fresh=True,
         backend=None,
+        fast=False,
     ):
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
@@ -43,6 +44,7 @@ class Ralph:
         self.completion_promise = completion_promise
         self.fresh = fresh
         self.backend = backend
+        self.fast = fast
         self.include_thinking = True
 
     def hook_before_loop(self):
@@ -159,25 +161,9 @@ class Ralph:
                 self.hook_before_iteration(iteration)
 
                 if self.fresh:
-                    runner = Agent(
-                        self.cwd,
-                        self.yolo,
-                        None,
-                        self.flags,
-                        welfare=True,
-                        include_thinking=self.include_thinking,
-                        backend=self.backend,
-                    )
+                    runner = self._new_agent()
                 elif runner is None:
-                    runner = Agent(
-                        self.cwd,
-                        self.yolo,
-                        None,
-                        self.flags,
-                        welfare=True,
-                        include_thinking=self.include_thinking,
-                        backend=self.backend,
-                    )
+                    runner = self._new_agent()
 
                 prompt = self.build_prompt(iteration)
                 stopped = False
@@ -249,6 +235,28 @@ class Ralph:
             if not state_missing:
                 _cleanup_state(state_path)
             self.hook_after_loop(last_message, stop_reason)
+
+    def _new_agent(self):
+        if self.fast:
+            return Agent(
+                self.cwd,
+                self.yolo,
+                None,
+                self.flags,
+                welfare=True,
+                include_thinking=self.include_thinking,
+                backend=self.backend,
+                fast=True,
+            )
+        return Agent(
+            self.cwd,
+            self.yolo,
+            None,
+            self.flags,
+            welfare=True,
+            include_thinking=self.include_thinking,
+            backend=self.backend,
+        )
 
 
 def cancel_ralph_loop(cwd=None):

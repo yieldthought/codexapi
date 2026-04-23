@@ -5,10 +5,35 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from codexapi.agent import _parse_jsonl
+from codexapi.agent import _codex_fast_config, _parse_jsonl
+from codexapi.async_agent import _build_codex_command
 
 
 class AgentBackendTests(unittest.TestCase):
+    def test_codex_fast_config_defaults_to_normal_mode(self):
+        self.assertEqual(_codex_fast_config(False), ["-c", "features.fast_mode=false"])
+
+    def test_codex_fast_config_enables_fast_mode(self):
+        self.assertEqual(
+            _codex_fast_config(True),
+            [
+                "-c",
+                "service_tier=fast",
+                "-c",
+                "features.fast_mode=true",
+            ],
+        )
+
+    def test_async_codex_command_uses_normal_mode_by_default(self):
+        command = _build_codex_command(None, True, None)
+        self.assertIn("features.fast_mode=false", command)
+        self.assertNotIn("service_tier=fast", command)
+
+    def test_async_codex_command_can_enable_fast_mode(self):
+        command = _build_codex_command(None, True, None, fast=True)
+        self.assertIn("service_tier=fast", command)
+        self.assertIn("features.fast_mode=true", command)
+
     def test_parse_jsonl_extracts_last_token_usage(self):
         output = "\n".join(
             [

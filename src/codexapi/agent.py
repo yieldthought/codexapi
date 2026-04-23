@@ -54,6 +54,7 @@ def agent(
     include_thinking=False,
     backend=None,
     env=None,
+    fast=False,
 ):
     """Run a single agent turn and return only the agent's message.
 
@@ -65,12 +66,13 @@ def agent(
         include_thinking: When true, return all agent messages joined together.
         backend: Agent backend to use ("codex" or "cursor").
         env: Optional environment variables for the backend subprocess.
+        fast: Enable Codex fast mode. Defaults to normal mode.
 
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
     message, _thread_id, _usage = _run_agent(
-        prompt, cwd, None, yolo, flags, include_thinking, backend, env
+        prompt, cwd, None, yolo, flags, include_thinking, backend, env, fast
     )
     return message
 
@@ -103,6 +105,7 @@ class Agent:
         include_thinking=False,
         backend=None,
         env=None,
+        fast=False,
     ):
         """Create a new session wrapper.
 
@@ -116,6 +119,7 @@ class Agent:
             include_thinking: When true, return all agent messages joined together.
             backend: Agent backend to use ("codex" or "cursor").
             env: Optional environment variables for the backend subprocess.
+            fast: Enable Codex fast mode. Defaults to normal mode.
         """
         self.cwd = cwd
         self._yolo = yolo
@@ -125,6 +129,7 @@ class Agent:
         self.thread_id = thread_id
         self._backend = backend
         self._env = env
+        self._fast = fast
         self.last_usage = {}
 
     def __call__(self, prompt):
@@ -140,6 +145,7 @@ class Agent:
             self._include_thinking,
             self._backend,
             self._env,
+            self._fast,
         )
         if thread_id:
             self.thread_id = thread_id
@@ -149,15 +155,25 @@ class Agent:
         return message
 
 
-def _run_agent(prompt, cwd, thread_id, yolo, flags, include_thinking, backend, env):
+def _run_agent(
+    prompt,
+    cwd,
+    thread_id,
+    yolo,
+    flags,
+    include_thinking,
+    backend,
+    env,
+    fast=False,
+):
     backend = _resolve_backend(backend)
     _ensure_backend_available(backend, env)
     if backend == "codex":
-        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
+        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env, fast)
     return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
+def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env, fast=False):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -171,6 +187,7 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
         command.append("--yolo")
     else:
         command.append("--full-auto")
+    command.extend(_codex_fast_config(fast))
     if flags:
         command.extend(shlex.split(flags))
     if cwd:
@@ -196,6 +213,18 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
         raise RuntimeError(msg)
 
     return _parse_jsonl(result.stdout, include_thinking)
+
+
+def _codex_fast_config(fast):
+    """Return Codex config flags for normal or fast mode."""
+    if fast:
+        return [
+            "-c",
+            "service_tier=fast",
+            "-c",
+            "features.fast_mode=true",
+        ]
+    return ["-c", "features.fast_mode=false"]
 
 
 def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env):

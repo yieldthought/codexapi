@@ -192,6 +192,7 @@ def estimate(
     flags,
     previous_total,
     backend=None,
+    fast=False,
 ):
     estimate_prompt = _build_estimate_prompt(
         prompt,
@@ -199,8 +200,14 @@ def estimate(
         check_output or "",
         previous_total,
     )
-    output = agent(estimate_prompt, cwd, yolo, flags, backend=backend)
+    output = _call_agent(estimate_prompt, cwd, yolo, flags, backend, fast)
     return _estimate_result(output)
+
+
+def _call_agent(prompt, cwd, yolo, flags, backend, fast):
+    if fast:
+        return agent(prompt, cwd, yolo, flags, backend=backend, fast=True)
+    return agent(prompt, cwd, yolo, flags, backend=backend)
 
 
 def _fix_prompt(error):
@@ -258,6 +265,7 @@ def task(
     on_success=None,
     on_failure=None,
     backend=None,
+    fast=False,
 ):
     """Run a prompt with optional checker-driven retries.
 
@@ -275,6 +283,7 @@ def task(
         on_success: Optional prompt to run after a successful task.
         on_failure: Optional prompt to run after a failed task.
         backend: Agent backend to use ("codex" or "cursor").
+        fast: Enable Codex fast mode. Defaults to normal mode.
 
     Returns:
         The agent's response text when the task succeeds.
@@ -295,6 +304,7 @@ def task(
         on_success,
         on_failure,
         backend,
+        fast,
     )
     if result.success:
         return result.summary
@@ -314,6 +324,7 @@ def task_result(
     on_success=None,
     on_failure=None,
     backend=None,
+    fast=False,
 ):
     """Run a prompt with optional checker-driven retries and return TaskResult.
 
@@ -344,6 +355,7 @@ def task_result(
         on_success=on_success_text,
         on_failure=on_failure_text,
         backend=backend,
+        fast=fast,
     )
     return runner(progress=progress)
 
@@ -390,6 +402,7 @@ class Task:
         thread_id=None,
         flags=None,
         backend=None,
+        fast=False,
     ):
         if max_iterations < 0:
             raise ValueError("max_iterations must be >= 0")
@@ -403,20 +416,32 @@ class Task:
         self._yolo = yolo
         self._flags = flags
         self._backend = backend
+        self._fast = fast
         self._progress_enabled = False
         self._progress_updates = False
         self._progress_bar = None
         self._progress_total = None
         self._progress_start = None
         self._pushover = Pushover()
-        self.agent = Agent(
-            cwd,
-            yolo,
-            thread_id,
-            flags,
-            welfare=True,
-            backend=backend,
-        )
+        if fast:
+            self.agent = Agent(
+                cwd,
+                yolo,
+                thread_id,
+                flags,
+                welfare=True,
+                backend=backend,
+                fast=True,
+            )
+        else:
+            self.agent = Agent(
+                cwd,
+                yolo,
+                thread_id,
+                flags,
+                welfare=True,
+                backend=backend,
+            )
 
     def set_up(self):
         """Clone a repo, set up a directory etc."""
@@ -439,12 +464,13 @@ class Task:
         last_output = output if output is not None else self.last_output
         last_output = last_output or ""
         check_prompt = _build_check_prompt(check_text, last_output)
-        check_output = agent(
+        check_output = _call_agent(
             check_prompt,
             self.cwd,
             self._yolo,
             self._flags,
-            backend=self._backend,
+            self._backend,
+            self._fast,
         )
         self.last_check_output = check_output
         success, reason = _check_result(check_output)
@@ -522,6 +548,7 @@ class Task:
                     self._flags,
                     self._progress_total,
                     backend=self._backend,
+                    fast=self._fast,
                 ),
                 None,
             )
@@ -696,6 +723,7 @@ class AutoTask(Task):
         on_success=None,
         on_failure=None,
         backend=None,
+        fast=False,
     ):
         if not (check is None or check is False or isinstance(check, str)):
             raise TypeError("check must be a string or False")
@@ -709,6 +737,7 @@ class AutoTask(Task):
             thread_id,
             flags,
             backend,
+            fast,
         )
         self.check_text = check
         self._set_up = _validate_hook("set_up", set_up)
@@ -718,7 +747,14 @@ class AutoTask(Task):
 
     def _run_hook(self, text):
         if text:
-            agent(text, self.cwd, self._yolo, self._flags, backend=self._backend)
+            _call_agent(
+                text,
+                self.cwd,
+                self._yolo,
+                self._flags,
+                self._backend,
+                self._fast,
+            )
 
     def set_up(self):
         self._run_hook(self._set_up)
@@ -731,4 +767,3 @@ class AutoTask(Task):
 
     def on_failure(self, result):
         self._run_hook(self._on_failure)
-

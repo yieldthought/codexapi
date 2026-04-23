@@ -63,6 +63,8 @@ for update in agent.watch(poll_interval=2.0):
 
 Use `backend="cursor"` (or set `CODEXAPI_BACKEND=cursor`) to switch to the
 Cursor agent backend.
+Use `fast=True` in Codex API calls, or `--fast` in the CLI, to opt into Codex
+fast mode. Normal mode is the default.
 
 ## CLI
 
@@ -73,6 +75,7 @@ codexapi --version
 codexapi run "Summarize this repo."
 codexapi run --cwd /path/to/project "Fix the failing tests."
 echo "Say hello." | codexapi run
+codexapi run --fast "Summarize this repo quickly."
 codexapi run --backend cursor "Summarize this repo."
 ```
 
@@ -318,7 +321,7 @@ codexapi foreach list.txt task.yaml --retry-all
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False, backend=None) -> str`
+### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False, backend=None, fast=False) -> str`
 
 Runs a single agent turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -329,8 +332,9 @@ items are filtered out.
 - `flags` (str | None): extra CLI flags to pass to the agent backend.
 - `include_thinking` (bool): when true, return all agent messages joined.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
+- `fast` (bool): enable Codex fast mode (defaults to normal mode).
 
-### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False, backend=None)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False, backend=None, fast=False)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -343,9 +347,10 @@ the same conversation and returns only the agent's message.
   and raise `WelfareStop` if the agent outputs `MAKE IT STOP`.
 - `include_thinking` (bool): when true, return all agent messages joined.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
+- `fast` (bool): enable Codex fast mode (defaults to normal mode).
 For Cursor, `thread_id` corresponds to the `session_id` returned by the agent.
 
-### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None, backend=None) -> dict`
+### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None, backend=None, fast=False) -> dict`
 
 Runs a long-lived agent session and periodically checks in with the current
 local time and a reminder of `prompt`. Each check-in expects JSON with keys:
@@ -358,7 +363,7 @@ Lead also injects the leadbook content into each prompt. By default it uses
 path string to override the location.
 Set `backend="cursor"` (or `CODEXAPI_BACKEND=cursor`) to use Cursor.
 
-### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None) -> str`
+### `task(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None, fast=False) -> str`
 
 Runs a task with checker-driven retries and returns the success summary.
 Raises `TaskFailed` when the maximum iterations are reached.
@@ -368,14 +373,15 @@ Raises `TaskFailed` when the maximum iterations are reached.
 - `progress` (bool): show a tqdm progress bar with a one-line status after each round.
 - `set_up`/`tear_down`/`on_success`/`on_failure` (str | None): optional hook prompts.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
+- `fast` (bool): enable Codex fast mode (defaults to normal mode).
 
-### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None) -> TaskResult`
+### `task_result(prompt, check=None, max_iterations=10, cwd=None, yolo=True, flags=None, progress=False, set_up=None, tear_down=None, on_success=None, on_failure=None, backend=None, fast=False) -> TaskResult`
 
 Runs a task with checker-driven retries and returns a `TaskResult` without
 raising `TaskFailed`.
 Arguments mirror `task()` (including hooks).
 
-### `Task(prompt, max_iterations=10, cwd=None, yolo=True, thread_id=None, flags=None, backend=None)`
+### `Task(prompt, max_iterations=10, cwd=None, yolo=True, thread_id=None, flags=None, backend=None, fast=False)`
 
 Runs an agent task with checker-driven retries. Subclass it and implement
 `check()` to return an error string when the task is incomplete, or return
@@ -408,7 +414,7 @@ Exception raised by `task()` when iterations are exhausted.
 - `iterations` (int | None): iterations made when the task failed.
 - `errors` (str | None): last checker error, if any.
 
-### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None, backend=None) -> ForeachResult`
+### `foreach(list_file, task_file, n=None, cwd=None, yolo=True, flags=None, backend=None, fast=False) -> ForeachResult`
 
 Runs a task file over a list of items, updating the list file in place.
 
@@ -419,6 +425,7 @@ Runs a task file over a list of items, updating the list file in place.
 - `yolo` (bool): pass `--yolo` when true (defaults to true).
 - `flags` (str | None): extra CLI flags to pass to the agent backend.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
+- `fast` (bool): enable Codex fast mode (defaults to normal mode).
 
 ### `ForeachResult(succeeded, failed, skipped, results)`
 
@@ -433,6 +440,8 @@ Simple result object returned by `foreach()`.
 
 - Codex backend uses `codex exec --json` and parses JSONL `agent_message` items.
 - Codex backend passes `--skip-git-repo-check` so it can run outside a git repo.
+- Codex backend defaults to normal mode and passes `features.fast_mode=false`;
+  `fast=True` / `--fast` also passes `service_tier=fast` and `features.fast_mode=true`.
 - Cursor backend uses `cursor agent --print --output-format json --trust` and parses the JSON result.
 - `include_thinking=True` only affects Codex; Cursor returns a single result string.
 - Passes `--yolo` by default (Codex uses `--full-auto` when disabled).

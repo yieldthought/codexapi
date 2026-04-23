@@ -83,6 +83,7 @@ def lead(
     flags=None,
     leadbook=None,
     backend=None,
+    fast=False,
 ):
     """Run a periodic lead loop.
 
@@ -94,6 +95,7 @@ def lead(
         flags: Additional raw CLI flags to pass to the agent backend.
         leadbook: Optional path to the leadbook file. Set to False to disable.
         backend: Agent backend to use ("codex" or "cursor").
+        fast: Enable Codex fast mode. Defaults to normal mode.
 
     Returns:
         The last parsed JSON status object.
@@ -106,7 +108,10 @@ def lead(
         raise ValueError("prompt must be a non-empty string")
 
     interval = minutes * 60
-    session = Agent(cwd, yolo, None, flags, backend=backend)
+    if fast:
+        session = Agent(cwd, yolo, None, flags, backend=backend, fast=True)
+    else:
+        session = Agent(cwd, yolo, None, flags, backend=backend)
     pushover = Pushover()
     pushover.ensure_ready()
     title = _format_title(prompt)

@@ -153,6 +153,67 @@ class AsyncAgentTests(unittest.TestCase):
                 {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
             )
 
+    def test_async_agent_reports_codex_json_error_events(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            code_home = root / "codex-home"
+            workdir = root / "work"
+            workdir.mkdir()
+            fake_codex = root / "fake-codex"
+            fake_codex.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import sys
+
+                    sys.stdin.read()
+                    print(json.dumps({"type": "thread.started", "thread_id": "thread-error"}), flush=True)
+                    print(json.dumps({"type": "turn.started"}), flush=True)
+                    print(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": "Reconnecting... 5/5 (model unavailable)",
+                            }
+                        ),
+                        flush=True,
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "type": "turn.failed",
+                                "error": {"message": "The model `gpt-5.5` does not exist."},
+                            }
+                        ),
+                        flush=True,
+                    )
+                    raise SystemExit(1)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IXUSR)
+
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(code_home), "USER": "tester"},
+                clear=False,
+            ):
+                with patch("codexapi.async_agent._CODEX_BIN", str(fake_codex)):
+                    agent = AsyncAgent.start(
+                        "Investigate the bug.",
+                        cwd=str(workdir),
+                        backend="codex",
+                        name="async-error-test",
+                    )
+                    final = agent.wait(poll_interval=0.01)
+
+            self.assertEqual(final["status"], "error")
+            self.assertEqual(final["last_error"], "The model `gpt-5.5` does not exist.")
+            self.assertIn("model unavailable", final["errors"][0])
+            self.assertEqual(final["activity"], "The model `gpt-5.5` does not exist.")
+
 
 if __name__ == "__main__":
     unittest.main()

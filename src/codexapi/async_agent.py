@@ -13,6 +13,7 @@ import uuid
 from .agent import (
     _CODEX_BIN,
     _CURSOR_BIN,
+    _codex_fast_config,
     _ensure_backend_available,
     _event_usage,
     _merged_env,
@@ -48,6 +49,7 @@ class AsyncAgent:
         self._lock = threading.Lock()
         self._stdout_lines: list[str] = []
         self._stderr_lines: list[str] = []
+        self._errors: list[str] = []
         self._messages: list[str] = []
         self._thread_id = ""
         self._rollout_path = ""
@@ -85,6 +87,7 @@ class AsyncAgent:
         backend=None,
         env=None,
         name=None,
+        fast=False,
     ):
         """Start a backend subprocess and return an async handle immediately."""
         if not isinstance(prompt, str) or not prompt.strip():
@@ -92,7 +95,7 @@ class AsyncAgent:
 
         backend = _resolve_backend(backend)
         _ensure_backend_available(backend, env)
-        command = _build_command(backend, cwd, yolo, flags)
+        command = _build_command(backend, cwd, yolo, flags, fast)
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -157,6 +160,7 @@ class AsyncAgent:
             progress = list(self._progress)
             tools = list(self._tools) if include_actions else []
             stderr_lines = list(self._stderr_lines)
+            error_lines = list(self._errors)
             thread_id = self._thread_id
             rollout_path = self._rollout_path
             last_event_at = self._last_event_at
@@ -168,7 +172,9 @@ class AsyncAgent:
             progress=progress,
             final_output=final_output,
             stderr_lines=stderr_lines,
+            error_lines=error_lines,
         )
+        last_error = error_lines[-1] if error_lines else stderr_lines[-1] if stderr_lines else ""
         return {
             "id": self.id,
             "name": self.name,
@@ -184,8 +190,9 @@ class AsyncAgent:
             "final_output": final_output,
             "last_event_at": last_event_at,
             "returncode": returncode,
-            "last_error": stderr_lines[-1] if stderr_lines else "",
+            "last_error": last_error,
             "stderr": "\n".join(stderr_lines),
+            "errors": error_lines,
             "messages": messages,
             "usage": last_usage,
         }
@@ -310,6 +317,16 @@ class AsyncAgent:
                     text = item.get("text")
                     if isinstance(text, str):
                         self._messages.append(text)
+            elif event.get("type") == "error":
+                message = event.get("message")
+                if isinstance(message, str) and message.strip():
+                    self._errors.append(message.strip())
+            elif event.get("type") == "turn.failed":
+                error = event.get("error") or {}
+                if isinstance(error, dict):
+                    message = error.get("message")
+                    if isinstance(message, str) and message.strip():
+                        self._errors.append(message.strip())
 
     def _refresh_rollout(self) -> None:
         if self.backend != "codex":
@@ -359,13 +376,13 @@ class AsyncAgent:
         return self._rollout_final_output
 
 
-def _build_command(backend, cwd, yolo, flags):
+def _build_command(backend, cwd, yolo, flags, fast=False):
     if backend == "codex":
-        return _build_codex_command(cwd, yolo, flags)
+        return _build_codex_command(cwd, yolo, flags, fast)
     return _build_cursor_command(cwd, yolo, flags)
 
 
-def _build_codex_command(cwd, yolo, flags):
+def _build_codex_command(cwd, yolo, flags, fast=False):
     command = [
         _CODEX_BIN,
         "exec",
@@ -378,6 +395,7 @@ def _build_codex_command(cwd, yolo, flags):
         command.append("--yolo")
     else:
         command.append("--full-auto")
+    command.extend(_codex_fast_config(fast))
     if flags:
         command.extend(shlex.split(flags))
     if cwd:
@@ -425,9 +443,11 @@ def _status_text(returncode, canceled):
     return "error"
 
 
-def _activity_text(status, progress, final_output, stderr_lines):
+def _activity_text(status, progress, final_output, stderr_lines, error_lines=None):
     if progress:
         return progress[-1]
+    if status == "error" and error_lines:
+        return error_lines[-1]
     if status == "error" and stderr_lines:
         return stderr_lines[-1]
     if final_output:
