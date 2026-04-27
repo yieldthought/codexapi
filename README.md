@@ -65,6 +65,8 @@ Use `backend="cursor"` (or set `CODEXAPI_BACKEND=cursor`) to switch to the
 Cursor agent backend.
 Use `fast=True` in Codex API calls, or `--fast` in the CLI, to opt into Codex
 fast mode. Normal mode is the default.
+Use `model="..."` and `thinking="..."` in Codex API calls to override the
+backend model and reasoning effort for a run.
 
 ## CLI
 
@@ -321,7 +323,7 @@ codexapi foreach list.txt task.yaml --retry-all
 
 ## API
 
-### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False, backend=None, fast=False) -> str`
+### `agent(prompt, cwd=None, yolo=True, flags=None, include_thinking=False, backend=None, fast=False, model=None, thinking=None) -> str`
 
 Runs a single agent turn and returns only the agent's message. Any reasoning
 items are filtered out.
@@ -333,8 +335,10 @@ items are filtered out.
 - `include_thinking` (bool): when true, return all agent messages joined.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
 - `fast` (bool): enable Codex fast mode (defaults to normal mode).
+- `model` (str | None): backend model override. Codex maps this to `-c model=...`; Cursor maps it to `--model ...`.
+- `thinking` (str | None): Codex reasoning effort override, mapped to `-c model_reasoning_effort=...`.
 
-### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False, backend=None, fast=False)`
+### `Agent(cwd=None, yolo=True, thread_id=None, flags=None, welfare=False, include_thinking=False, backend=None, fast=False, model=None, thinking=None)`
 
 Creates a stateful session wrapper. Calling the instance sends the prompt into
 the same conversation and returns only the agent's message.
@@ -348,6 +352,8 @@ the same conversation and returns only the agent's message.
 - `include_thinking` (bool): when true, return all agent messages joined.
 - `backend` (str | None): `codex` or `cursor` (defaults to `CODEXAPI_BACKEND` or `codex`).
 - `fast` (bool): enable Codex fast mode (defaults to normal mode).
+- `model` (str | None): backend model override.
+- `thinking` (str | None): Codex reasoning effort override.
 For Cursor, `thread_id` corresponds to the `session_id` returned by the agent.
 
 ### `lead(minutes, prompt, cwd=None, yolo=True, flags=None, leadbook=None, backend=None, fast=False) -> dict`

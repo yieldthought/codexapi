@@ -1,6 +1,6 @@
 """Minimal Python API for running agent CLIs."""
 
-from .agent import Agent, WelfareStop, agent
+from .agent import Agent, WelfareStop, agent, build_agent_flags
 from .async_agent import AsyncAgent
 from .foreach import ForeachResult, foreach
 from .pushover import Pushover
@@ -15,6 +15,7 @@ __all__ = [
     "AsyncAgent",
     "ForeachResult",
     "Pushover",
+    "build_agent_flags",
     "quota_line",
     "rate_limits",
     "Ralph",
@@ -29,4 +30,4 @@ __all__ = [
     "task_result",
     "lead",
 ]
-__version__ = "0.12.9"
+__version__ = "0.12.10"

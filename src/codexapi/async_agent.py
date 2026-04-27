@@ -12,8 +12,9 @@ import uuid
 
 from .agent import (
     _CODEX_BIN,
-    _CURSOR_BIN,
+    _agent_config_flag_parts,
     _codex_fast_config,
+    _cursor_command_prefix,
     _ensure_backend_available,
     _event_usage,
     _merged_env,
@@ -88,6 +89,8 @@ class AsyncAgent:
         env=None,
         name=None,
         fast=False,
+        model=None,
+        thinking=None,
     ):
         """Start a backend subprocess and return an async handle immediately."""
         if not isinstance(prompt, str) or not prompt.strip():
@@ -95,7 +98,7 @@ class AsyncAgent:
 
         backend = _resolve_backend(backend)
         _ensure_backend_available(backend, env)
-        command = _build_command(backend, cwd, yolo, flags, fast)
+        command = _build_command(backend, cwd, yolo, flags, fast, model, thinking)
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -376,13 +379,13 @@ class AsyncAgent:
         return self._rollout_final_output
 
 
-def _build_command(backend, cwd, yolo, flags, fast=False):
+def _build_command(backend, cwd, yolo, flags, fast=False, model=None, thinking=None):
     if backend == "codex":
-        return _build_codex_command(cwd, yolo, flags, fast)
-    return _build_cursor_command(cwd, yolo, flags)
+        return _build_codex_command(cwd, yolo, flags, fast, model, thinking)
+    return _build_cursor_command(cwd, yolo, flags, model, thinking)
 
 
-def _build_codex_command(cwd, yolo, flags, fast=False):
+def _build_codex_command(cwd, yolo, flags, fast=False, model=None, thinking=None):
     command = [
         _CODEX_BIN,
         "exec",
@@ -396,6 +399,7 @@ def _build_codex_command(cwd, yolo, flags, fast=False):
     else:
         command.append("--full-auto")
     command.extend(_codex_fast_config(fast))
+    command.extend(_agent_config_flag_parts("codex", model, thinking))
     if flags:
         command.extend(shlex.split(flags))
     if cwd:
@@ -404,16 +408,15 @@ def _build_codex_command(cwd, yolo, flags, fast=False):
     return command
 
 
-def _build_cursor_command(cwd, yolo, flags):
-    command = [
-        _CURSOR_BIN,
-        "agent",
+def _build_cursor_command(cwd, yolo, flags, model=None, thinking=None):
+    command = _cursor_command_prefix() + [
         "--trust",
     ]
     if cwd:
         command.extend(["--workspace", os.fspath(cwd)])
     if yolo:
         command.append("--yolo")
+    command.extend(_agent_config_flag_parts("cursor", model, thinking))
     if flags:
         command.extend(shlex.split(flags))
     command.extend(["--print", "--output-format", "json"])

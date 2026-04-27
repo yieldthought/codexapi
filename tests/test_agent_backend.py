@@ -2,11 +2,12 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from codexapi.agent import _codex_fast_config, _parse_jsonl
-from codexapi.async_agent import _build_codex_command
+from codexapi.agent import _codex_fast_config, _parse_jsonl, build_agent_flags
+from codexapi.async_agent import _build_codex_command, _build_cursor_command
 
 
 class AgentBackendTests(unittest.TestCase):
@@ -33,6 +34,35 @@ class AgentBackendTests(unittest.TestCase):
         command = _build_codex_command(None, True, None, fast=True)
         self.assertIn("service_tier=fast", command)
         self.assertIn("features.fast_mode=true", command)
+
+    def test_build_agent_flags_maps_codex_model_and_thinking_to_config(self):
+        self.assertEqual(
+            build_agent_flags(backend="codex", model="gpt-5.5", thinking="xhigh"),
+            "-c model=gpt-5.5 -c model_reasoning_effort=xhigh",
+        )
+
+    def test_build_agent_flags_maps_cursor_model_to_model_flag(self):
+        self.assertEqual(
+            build_agent_flags(backend="cursor", model="claude-4"),
+            "--model claude-4",
+        )
+
+    def test_build_agent_flags_rejects_cursor_thinking(self):
+        with self.assertRaises(ValueError):
+            build_agent_flags(backend="cursor", thinking="high")
+
+    def test_async_codex_command_can_set_model_and_thinking(self):
+        command = _build_codex_command(None, True, None, model="gpt-5.5", thinking="high")
+        self.assertIn("model=gpt-5.5", command)
+        self.assertIn("model_reasoning_effort=high", command)
+
+    def test_async_cursor_command_can_use_direct_cursor_agent(self):
+        with patch("codexapi.async_agent._cursor_command_prefix", return_value=["/tmp/cursor-agent"]):
+            command = _build_cursor_command("/tmp/work", True, None, model="composer-2")
+        self.assertEqual(command[0], "/tmp/cursor-agent")
+        self.assertNotEqual(command[1], "agent")
+        self.assertIn("--model", command)
+        self.assertIn("composer-2", command)
 
     def test_parse_jsonl_extracts_last_token_usage(self):
         output = "\n".join(

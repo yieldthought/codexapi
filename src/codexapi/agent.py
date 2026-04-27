@@ -11,6 +11,7 @@ from . import welfare
 _CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 _CURSOR_BIN = os.environ.get("CURSOR_BIN", "cursor")
 _SUPPORTED_BACKENDS = {"codex", "cursor"}
+_CURSOR_AGENT_BIN = os.path.expanduser("~/.local/bin/cursor-agent")
 
 
 def _resolve_backend(backend):
@@ -33,12 +34,15 @@ def _ensure_backend_available(backend, env=None):
         env_var = "CODEX_BIN"
         label = "Codex CLI"
     else:
-        command = _CURSOR_BIN
+        command = _cursor_bin(env)
         env_var = "CURSOR_BIN"
         label = "Cursor agent CLI"
     merged = _merged_env(env)
     path_value = None if merged is None else merged.get("PATH")
-    resolved = shutil.which(command, path=path_value)
+    if os.path.isabs(command):
+        resolved = command if os.path.exists(command) else None
+    else:
+        resolved = shutil.which(command, path=path_value)
     if resolved:
         return resolved
     raise RuntimeError(
@@ -55,6 +59,8 @@ def agent(
     backend=None,
     env=None,
     fast=False,
+    model=None,
+    thinking=None,
 ):
     """Run a single agent turn and return only the agent's message.
 
@@ -67,12 +73,24 @@ def agent(
         backend: Agent backend to use ("codex" or "cursor").
         env: Optional environment variables for the backend subprocess.
         fast: Enable Codex fast mode. Defaults to normal mode.
+        model: Optional backend model override.
+        thinking: Optional backend reasoning/thinking effort override.
 
     Returns:
         The agent's visible response text with reasoning traces removed.
     """
     message, _thread_id, _usage = _run_agent(
-        prompt, cwd, None, yolo, flags, include_thinking, backend, env, fast
+        prompt,
+        cwd,
+        None,
+        yolo,
+        flags,
+        include_thinking,
+        backend,
+        env,
+        fast,
+        model,
+        thinking,
     )
     return message
 
@@ -106,6 +124,8 @@ class Agent:
         backend=None,
         env=None,
         fast=False,
+        model=None,
+        thinking=None,
     ):
         """Create a new session wrapper.
 
@@ -120,6 +140,8 @@ class Agent:
             backend: Agent backend to use ("codex" or "cursor").
             env: Optional environment variables for the backend subprocess.
             fast: Enable Codex fast mode. Defaults to normal mode.
+            model: Optional backend model override.
+            thinking: Optional backend reasoning/thinking effort override.
         """
         self.cwd = cwd
         self._yolo = yolo
@@ -130,6 +152,8 @@ class Agent:
         self._backend = backend
         self._env = env
         self._fast = fast
+        self._model = model
+        self._thinking = thinking
         self.last_usage = {}
 
     def __call__(self, prompt):
@@ -146,6 +170,8 @@ class Agent:
             self._backend,
             self._env,
             self._fast,
+            self._model,
+            self._thinking,
         )
         if thread_id:
             self.thread_id = thread_id
@@ -165,15 +191,49 @@ def _run_agent(
     backend,
     env,
     fast=False,
+    model=None,
+    thinking=None,
 ):
     backend = _resolve_backend(backend)
     _ensure_backend_available(backend, env)
     if backend == "codex":
-        return _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env, fast)
-    return _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env)
+        return _run_codex(
+            prompt,
+            cwd,
+            thread_id,
+            yolo,
+            flags,
+            include_thinking,
+            env,
+            fast,
+            model,
+            thinking,
+        )
+    return _run_cursor(
+        prompt,
+        cwd,
+        thread_id,
+        yolo,
+        flags,
+        include_thinking,
+        env,
+        model,
+        thinking,
+    )
 
 
-def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env, fast=False):
+def _run_codex(
+    prompt,
+    cwd,
+    thread_id,
+    yolo,
+    flags,
+    include_thinking,
+    env,
+    fast=False,
+    model=None,
+    thinking=None,
+):
     """Invoke the Codex CLI and return the message plus thread id (if any)."""
     command = [
         _CODEX_BIN,
@@ -188,6 +248,7 @@ def _run_codex(prompt, cwd, thread_id, yolo, flags, include_thinking, env, fast=
     else:
         command.append("--full-auto")
     command.extend(_codex_fast_config(fast))
+    command.extend(_agent_config_flag_parts("codex", model, thinking))
     if flags:
         command.extend(shlex.split(flags))
     if cwd:
@@ -227,11 +288,82 @@ def _codex_fast_config(fast):
     return ["-c", "features.fast_mode=false"]
 
 
-def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
+def _cursor_bin(env=None):
+    merged = _merged_env(env)
+    env_source = merged or os.environ
+    override = env_source.get("CURSOR_BIN", "").strip()
+    if override:
+        return os.path.expanduser(override)
+
+    path_value = None if merged is None else merged.get("PATH")
+    direct = shutil.which("cursor-agent", path=path_value)
+    if direct:
+        return direct
+    if os.path.exists(_CURSOR_AGENT_BIN):
+        return _CURSOR_AGENT_BIN
+    return _CURSOR_BIN
+
+
+def _cursor_command_prefix(env=None):
+    command = _cursor_bin(env)
+    if os.path.basename(command) == "cursor-agent":
+        return [command]
+    return [command, "agent"]
+
+
+def build_agent_flags(*, backend=None, model=None, thinking=None, flags=None):
+    """Return raw backend flags for a model/thinking configuration.
+
+    The returned string is suitable for APIs that accept the existing ``flags``
+    parameter.
+    """
+    backend = _resolve_backend(backend)
+    parts = _agent_config_flag_parts(backend, model, thinking)
+    if flags:
+        parts.extend(shlex.split(flags))
+    return shlex.join(parts)
+
+
+def _agent_config_flag_parts(backend, model=None, thinking=None):
+    backend = _resolve_backend(backend)
+    parts = []
+    model = _clean_optional_text(model)
+    thinking = _clean_optional_text(thinking)
+
+    if backend == "codex":
+        if model:
+            parts.extend(["-c", f"model={model}"])
+        if thinking:
+            parts.extend(["-c", f"model_reasoning_effort={thinking}"])
+        return parts
+
+    if model:
+        parts.extend(["--model", model])
+    if thinking:
+        raise ValueError("thinking is only supported by the codex backend")
+    return parts
+
+
+def _clean_optional_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _run_cursor(
+    prompt,
+    cwd,
+    thread_id,
+    yolo,
+    flags,
+    include_thinking,
+    env,
+    model=None,
+    thinking=None,
+):
     """Invoke the Cursor agent CLI and return the message plus session id (if any)."""
-    command = [
-        _CURSOR_BIN,
-        "agent",
+    command = _cursor_command_prefix(env) + [
         "--trust",
     ]
     if cwd:
@@ -240,6 +372,7 @@ def _run_cursor(prompt, cwd, thread_id, yolo, flags, include_thinking, env):
         command.extend(["--resume", thread_id])
     if yolo:
         command.append("--yolo")
+    command.extend(_agent_config_flag_parts("cursor", model, thinking))
     if flags:
         command.extend(shlex.split(flags))
     command.extend(["--print", "--output-format", "json"])
